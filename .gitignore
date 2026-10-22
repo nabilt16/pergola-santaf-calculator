@@ -1,0 +1,23 @@
+# Environments and caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.vscode/
+.claude/
+
+# Secrets - never commit
+.env
+.streamlit/secrets.toml
+
+# Customer data and local test files
+row tables/
+*.pdf
+*.xls
+*.xlsx
+*.csv
+*.jfif
+*.jpg
+*.jpeg
+*.png

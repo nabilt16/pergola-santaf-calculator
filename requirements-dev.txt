@@ -1,0 +1,6 @@
+# Local development and tests:  pip install -r requirements-dev.txt
+-r requirements.txt
+pytest>=8.0
+xlwt>=1.3
+reportlab>=4.0
+watchdog>=4.0

@@ -1,0 +1,12 @@
+# Runtime dependencies (what Streamlit Community Cloud installs)
+streamlit>=1.50,<2
+pandas>=2.2,<4
+numpy>=1.26
+altair>=5.4
+openpyxl>=3.1
+xlrd>=2.0.1
+lxml>=5.0
+pdfplumber>=0.11
+pillow>=10.0
+pytesseract>=0.3.10
+anthropic>=2.0,<3
