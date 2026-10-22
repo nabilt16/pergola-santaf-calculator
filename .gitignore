@@ -21,3 +21,6 @@ row tables/
 *.jpg
 *.jpeg
 *.png
+
+# ...except the app icon
+!icon.png
