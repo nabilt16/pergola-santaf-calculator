@@ -34,7 +34,9 @@
         document.getElementById("setup").hidden = false;
       } else {
         var frame = document.getElementById("app");
-        frame.src = url + (url.indexOf("?") === -1 ? "?" : "&") + "embed=true";
+        // Streamlit Cloud's own "embed" page squeezes the app into a 150px frame, and its normal page
+        // refuses to be framed. "/~/+/" is the app itself, which is what Cloud loads in that frame.
+        frame.src = url.replace(/\/+$/, "") + "/~/+/";
         frame.hidden = false;
       }
       if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
