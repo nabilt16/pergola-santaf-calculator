@@ -692,7 +692,8 @@ def test_pwa_head_script_links_manifest_and_retouches():
     assert "theme-color" in script and "setTimeout" in script          # re-attach after load
     assert "data-pwa" in script                                        # idempotent across reruns
     html = (Path(__file__).resolve().parents[1] / "docs" / "index.html").read_text(encoding="utf-8")
-    assert 'rel="manifest"' in html and "embed=true" in html and "serviceWorker" in html
+    assert 'rel="manifest"' in html and "/~/+/" in html and "serviceWorker" in html
+    assert "embed=true" not in html.split("<script>", 1)[1].split("</script>")[0].replace("//", "")
 
 
 def test_app_renders_the_pwa_helper_without_errors():
