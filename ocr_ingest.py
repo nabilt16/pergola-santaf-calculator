@@ -156,7 +156,8 @@ def _row_positions(ys: list[float], extra: list[float], pitch: float) -> list[fl
     return rows
 
 
-def rows_from_words(words: list[tuple], order: list[str], cell_reader=None) -> pd.DataFrame:
+def rows_from_words(words: list[tuple], order: list[str], cell_reader=None,
+                    reach: float = 1.0) -> pd.DataFrame:
     """Rebuild order rows from OCR word boxes using the date column as anchor.
 
     `words` are (x_center, y_center, height, text, conf). Every column gets its own row
@@ -164,6 +165,8 @@ def rows_from_words(words: list[tuple], order: list[str], cell_reader=None) -> p
     perspective makes rows tilt and converge. A word is placed by its nearest column and
     that column's model, so a missing or merged cell damages one field, not the whole row.
 
+    `reach` widens the window in which numeric columns are searched for beside the date
+    column (1.0 suits noisy OCR; exact PDF text, whose columns are spaced unevenly, uses more).
     `cell_reader(x, y, width, height, field) -> (text, conf)` optionally re-reads a
     single cell that came out missing or low-confidence. Adds a `check` column
     describing cells worth verifying by eye.
@@ -204,7 +207,7 @@ def rows_from_words(words: list[tuple], order: list[str], cell_reader=None) -> p
         fields = [f for f in fields if f != "order_id"]
         xs = [w[0] for w in words
               if top <= w[1] <= bottom and _clean_text(str(w[3]))
-              and 0.4 * spacing < (w[0] - date_x) * sign < (len(fields) + 0.05) * spacing
+              and 0.4 * spacing < (w[0] - date_x) * sign < (len(fields) + 0.05) * spacing * reach
               and parse_number(str(w[3])) is not None]
         if fields and xs:
             found = _cluster_columns(xs, len(fields), 0.1 * spacing, max(2, int(0.1 * n_rows)), date_x)

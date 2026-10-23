@@ -96,20 +96,28 @@ elif source == "PDF report":
                             accept_multiple_files=True)
     if pdfs:
         try:
-            frames = [pdf_ingest.load_pdf(f) for f in pdfs]
+            raw, load_report = pdf_ingest.load_many([(f.name, f) for f in pdfs])
         except pdf_ingest.PdfUnreadable as exc:
             st.error(str(exc))
             st.stop()
-        raw = pd.concat(frames, ignore_index=True)
+        for name, why in load_report.errors.items():
+            st.error(f"Skipped {name}: {why}")
+        if load_report.duplicates:
+            st.warning(f"{load_report.duplicates} row(s) appear in more than one of the files "
+                       "(the reports overlap) and are counted once.")
         incomplete = raw[["original_quantity", "original_length"]].isna().any(axis=1)
         if incomplete.any():
             st.warning(f"{int(incomplete.sum())} row(s) have no readable quantity or length and "
                        "are left out.")
             raw = raw[~incomplete].reset_index(drop=True)
-        source_name = ", ".join(f.name for f in pdfs)
-        source_id = "|".join(f"{f.name}:{f.size}" for f in pdfs)
-        if len(pdfs) == 1 and frames[0].attrs.get("footer_matches"):
-            st.success("The row count and quantity total match the totals printed in the report.")
+        loaded = [f for f in pdfs if f.name in load_report.loaded]
+        source_name = loaded[0].name if len(loaded) == 1 else f"{len(loaded)} PDF reports"
+        source_id = "|".join(f"{f.name}:{f.size}" for f in loaded)
+        if load_report.confirmed and not load_report.unconfirmed and not load_report.duplicates:
+            st.success("The row count and quantity total match the totals printed in "
+                       + ("the report." if len(loaded) == 1 else f"each of the {len(loaded)} reports."))
+        elif load_report.unconfirmed:
+            st.caption("Could not confirm the printed totals for: " + ", ".join(load_report.unconfirmed))
     else:
         st.info("Upload a digital PDF report (text can be selected in it). Scanned PDFs have no "
                 "text layer - use the scan option for those.")

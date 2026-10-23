@@ -376,6 +376,7 @@ def test_pdf_without_grid_uses_word_positions(tmp_path):
     totals = _make_pdf(path, grid=False, rtl=True)
     df = pdf_ingest.load_pdf(path)
     assert len(df) == 4 and df["original_quantity"].tolist()[:2] == [3.6, 2.835]
+    assert df["original_length"].tolist() == [1390, 2945, 8000, 945]     # lengths must not be lost
     assert df.attrs["footer_matches"] is True and totals.split()[1] == "4"
 
 
@@ -589,3 +590,60 @@ def test_app_password_gate(monkeypatch, tmp_path):
     assert at.error and len(at.radio) == 0
     at.text_input[0].set_value("letmein").run()
     assert len(at.radio) >= 1
+
+
+# ---- Several PDFs at once ----
+def _frame(rows):
+    return pd.DataFrame(rows, columns=["order_id", "confirmation_date", "code", "zone",
+                                       "original_quantity", "original_length"])
+
+
+def test_merge_reports_counts_overlap_once_but_keeps_real_repeats():
+    a = _frame([("1", "2026-11-01", "6", "70", 2.0, 1000),
+                ("1", "2026-11-01", "6", "70", 2.0, 1000),      # genuine repeat inside one file
+                ("2", "2026-11-02", "6", "20", 1.0, 2000)])
+    b = _frame([("2", "2026-11-02", "6", "20", 1.0, 2000),      # also in file a (overlap)
+                ("3", "2026-11-03", "6", "20", 4.0, 3000)])
+    merged, dropped = pdf_ingest.merge_reports([a, b])
+    assert dropped == 1 and len(merged) == 4
+    assert merged["order_id"].tolist().count("1") == 2           # repeat kept
+    assert pdf_ingest.merge_reports([a, _frame([("9", "2026-12-01", "6", "20", 1.0, 500)])])[1] == 0
+
+
+def test_load_many_skips_bad_files_by_name(tmp_path):
+    pytest.importorskip("reportlab")
+    from reportlab.pdfgen import canvas
+    good, blank = tmp_path / "good.pdf", tmp_path / "blank.pdf"
+    _make_pdf(good, grid=True, rtl=True)
+    c = canvas.Canvas(str(blank))
+    c.showPage()
+    c.save()
+    df, report = pdf_ingest.load_many([("good.pdf", good), ("copy.pdf", good), ("blank.pdf", blank)])
+    assert report.loaded == ["good.pdf", "copy.pdf"] and list(report.errors) == ["blank.pdf"]
+    assert "scan" in report.errors["blank.pdf"]
+    assert len(df) == 4 and report.duplicates == 4               # the identical copy counted once
+    with pytest.raises(pdf_ingest.PdfUnreadable, match="blank.pdf"):
+        pdf_ingest.load_many([("blank.pdf", blank)])
+
+
+def test_app_uploads_several_pdfs(tmp_path):
+    pytest.importorskip("reportlab")
+    from pathlib import Path
+
+    from streamlit.testing.v1 import AppTest
+    rows_a, rows_b = tmp_path / "a.pdf", tmp_path / "b.pdf"
+    _make_pdf(rows_a, grid=True, rtl=True)
+    _make_pdf(rows_b, grid=False, rtl=True)                       # same lines, different layout
+    app = Path(__file__).resolve().parents[1] / "app.py"
+    at = AppTest.from_file(str(app), default_timeout=90).run()
+    at.radio[0].set_value("PDF report").run()
+    uploader = at.file_uploader[0]
+    assert uploader.accept_multiple_files
+    uploader.set_value([("a.pdf", rows_a.read_bytes(), "application/pdf"),
+                        ("b.pdf", rows_b.read_bytes(), "application/pdf"),
+                        ("scan.pdf", b"%PDF-1.4 not really a pdf", "application/pdf")]).run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert any("Skipped scan.pdf" in e.value for e in at.error)
+    assert any("appear in more than one" in w.value for w in at.warning)
+    assert any("2 PDF reports" in c.value for c in at.caption)
+    assert len(at.tabs) == 7

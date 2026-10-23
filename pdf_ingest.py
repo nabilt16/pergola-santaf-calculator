@@ -11,6 +11,7 @@ source.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 
 import pandas as pd
 
@@ -92,7 +93,7 @@ def _words_rows(page) -> list[dict]:
     date_x = sum(w[0] for w in dates) / len(dates)
     id_x = sum(w[0] for w in ids) / len(ids)
     order = RTL_ORDER if id_x > date_x else LTR_ORDER
-    df = rows_from_words(words, order)
+    df = rows_from_words(words, order, reach=1.6)      # exact text: columns are spaced unevenly
     return df[COLUMNS].to_dict("records") if not df.empty else []
 
 
@@ -106,12 +107,16 @@ def load_pdf(source) -> pd.DataFrame:
     rows: list[dict] = []
     texts: list[str] = []
     has_text = False
-    with pdfplumber.open(source) as pdf:
-        for page in pdf.pages:
-            has_text = has_text or bool(page.chars)
-            texts.append(" ".join(w["text"] for w in page.extract_words()))
-            found = [r for t in page.extract_tables() for r in table_rows(t)]
-            rows.extend(found or _words_rows(page))
+    try:
+        with pdfplumber.open(source) as pdf:
+            for page in pdf.pages:
+                has_text = has_text or bool(page.chars)
+                texts.append(" ".join(w["text"] for w in page.extract_words()))
+                found = [r for t in page.extract_tables() for r in table_rows(t)]
+                rows.extend(found or _words_rows(page))
+    except Exception as exc:                  # corrupt, not a PDF, password-protected ...
+        raise PdfUnreadable("This file could not be read as a PDF (it may be damaged, "
+                            f"password-protected or not a PDF: {type(exc).__name__}).") from exc
     if not has_text:
         raise PdfUnreadable("This PDF has no text layer (it is a scan). Use the "
                             "\"Scan / photo of a document\" option instead.")
@@ -138,3 +143,50 @@ def footer_matches(df: pd.DataFrame, page_texts: list[str]) -> bool:
     total = float(df["original_quantity"].sum())
     shown = [t for t in tokens if "." in t and abs(float(t) - total) <= 0.01]
     return str(len(df)) in tokens and bool(shown)
+
+
+# --------------------------------------------------------------------------
+# Several PDFs at once
+# --------------------------------------------------------------------------
+@dataclass
+class LoadReport:
+    """What happened while loading a batch of PDFs (shown to the user)."""
+    loaded: list[str] = field(default_factory=list)
+    errors: dict[str, str] = field(default_factory=dict)       # file name -> why it was skipped
+    confirmed: list[str] = field(default_factory=list)         # totals printed in the PDF match
+    unconfirmed: list[str] = field(default_factory=list)       # no printed totals, or they differ
+    duplicates: int = 0                                         # rows shared by overlapping files
+
+
+def merge_reports(frames: list[pd.DataFrame]) -> tuple[pd.DataFrame, int]:
+    """Combine several reports without double counting overlapping ones.
+
+    A line that appears in more than one file counts once; a line that is genuinely repeated
+    inside one file (the same order line ordered twice) keeps its repeats. This is a union of
+    the files' lines taking the highest repeat count of each, so non-overlapping reports simply
+    add up. Returns (rows, number of rows dropped as overlap).
+    """
+    numbered = [f.assign(_n=f.groupby(COLUMNS, dropna=False).cumcount()) for f in frames]
+    combined = pd.concat(numbered, ignore_index=True)
+    merged = combined.drop_duplicates(subset=[*COLUMNS, "_n"]).drop(columns="_n")
+    return merged.reset_index(drop=True), len(combined) - len(merged)
+
+
+def load_many(files: list[tuple[str, object]]) -> tuple[pd.DataFrame, LoadReport]:
+    """Load (name, file) pairs; a bad file is reported by name and skipped, not fatal."""
+    report, frames = LoadReport(), []
+    for name, source in files:
+        try:
+            frame = load_pdf(source)
+        except PdfUnreadable as exc:
+            report.errors[name] = str(exc)
+            continue
+        frames.append(frame)
+        report.loaded.append(name)
+        (report.confirmed if frame.attrs.get("footer_matches") else report.unconfirmed).append(name)
+    if not frames:
+        raise PdfUnreadable("; ".join(f"{n}: {m}" for n, m in report.errors.items())
+                            or "No PDF files were provided.")
+    df, report.duplicates = merge_reports(frames)
+    df.attrs["incomplete_rows"] = int(df[["original_quantity", "original_length"]].isna().any(axis=1).sum())
+    return df, report
