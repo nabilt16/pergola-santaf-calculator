@@ -24,3 +24,5 @@ row tables/
 
 # ...except the app icon
 !icon.png
+!static/*.png
+!docs/*.png

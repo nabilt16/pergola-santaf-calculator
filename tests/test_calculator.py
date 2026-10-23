@@ -1,7 +1,11 @@
 import io
+import json
 import re
+from pathlib import Path
+
 import pandas as pd
 import pytest
+from streamlit.testing.v1 import AppTest
 
 import calculator as calc
 
@@ -647,3 +651,51 @@ def test_app_uploads_several_pdfs(tmp_path):
     assert any("appear in more than one" in w.value for w in at.warning)
     assert any("2 PDF reports" in c.value for c in at.caption)
     assert len(at.tabs) == 7
+
+
+# ---- PWA / installable app ----
+import pwa  # noqa: E402
+
+
+def _manifest(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("path", ["static/manifest.json", "docs/manifest.webmanifest"])
+def test_manifest_is_installable(path):
+    root = Path(__file__).resolve().parents[1]
+    m = _manifest(root / path)
+    assert m["name"] == "מחשבון סנטפים" and m["short_name"] and m["display"] == "standalone"
+    assert m["lang"] == "he" and m["dir"] == "rtl" and m["start_url"] and m["theme_color"].startswith("#")
+    from PIL import Image
+    sizes = set()
+    for icon in m["icons"]:
+        file = (root / path).parent / icon["src"]
+        assert file.exists(), icon["src"]                              # every icon is really there
+        with Image.open(file) as img:
+            assert f"{img.width}x{img.height}" == icon["sizes"] and img.format == "PNG"
+        sizes.add((icon["sizes"], icon["purpose"]))
+    assert ("192x192", "any") in sizes and ("512x512", "any") in sizes and ("512x512", "maskable") in sizes
+    assert any(i["src"] == "icon.png" for i in m["icons"]) or path.startswith("docs")
+
+
+def test_static_serving_is_enabled_and_icon_matches():
+    root = Path(__file__).resolve().parents[1]
+    config = (root / ".streamlit" / "config.toml").read_text(encoding="utf-8")
+    assert re.search(r"^enableStaticServing\s*=\s*true", config, re.M)
+    assert (root / "static" / "icon.png").read_bytes() == (root / "icon.png").read_bytes()
+
+
+def test_pwa_head_script_links_manifest_and_retouches():
+    script = pwa.head_script()
+    assert "app/static/manifest.json" in script and "apple-touch-icon" in script
+    assert "theme-color" in script and "setTimeout" in script          # re-attach after load
+    assert "data-pwa" in script                                        # idempotent across reruns
+    html = (Path(__file__).resolve().parents[1] / "docs" / "index.html").read_text(encoding="utf-8")
+    assert 'rel="manifest"' in html and "embed=true" in html and "serviceWorker" in html
+
+
+def test_app_renders_the_pwa_helper_without_errors():
+    app = Path(__file__).resolve().parents[1] / "app.py"
+    at = AppTest.from_file(str(app), default_timeout=60).run()
+    assert not at.exception

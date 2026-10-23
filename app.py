@@ -16,6 +16,7 @@ import calculator as calc
 import email_report
 import ocr_ingest as ocr
 import pdf_ingest
+import pwa
 import vision_ingest as vision
 
 st.set_page_config(page_title="מחשבון סנטפים", page_icon="icon.png", layout="wide")
@@ -23,8 +24,10 @@ st.set_page_config(page_title="מחשבון סנטפים", page_icon="icon.png",
 # Streamlit re-runs this script on every interaction but keeps imported modules cached, so a
 # running server would otherwise keep using an old calculator.py after it is edited. Reload the
 # project modules (dependencies first) so the functions called below always match the files.
-for _module in (ocr, calc, email_report, pdf_ingest, vision):
+for _module in (ocr, calc, email_report, pdf_ingest, pwa, vision):
     importlib.reload(_module)
+
+pwa.install_head_tags()          # lets phones offer "Install app" / "Add to Home screen"
 
 
 @st.cache_data(show_spinner=False)

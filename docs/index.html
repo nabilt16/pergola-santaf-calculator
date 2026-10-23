@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>מחשבון סנטפים</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2a78d6">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="סנטפים">
+  <style>
+    html, body { margin: 0; height: 100%; background: #fff; }
+    iframe { position: fixed; inset: 0; width: 100%; height: 100%; border: 0;
+             padding-top: env(safe-area-inset-top); box-sizing: border-box; }
+    #setup { font-family: sans-serif; padding: 2rem; line-height: 1.7; max-width: 38rem; margin: auto; }
+    code { background: #eef2f6; padding: 2px 6px; border-radius: 4px; direction: ltr; unicode-bidi: embed; }
+  </style>
+</head>
+<body>
+  <div id="setup" hidden>
+    <h2>צריך להגדיר את כתובת האפליקציה</h2>
+    <p>פתחו את הקובץ <code>docs/config.js</code> והחליפו את הכתובת בכתובת של אפליקציית ה-Streamlit שלכם, ואז העלו שוב ל-GitHub.</p>
+  </div>
+  <iframe id="app" title="מחשבון סנטפים" hidden
+          allow="camera; microphone; clipboard-write; fullscreen"></iframe>
+  <script src="config.js"></script>
+  <script>
+    (function () {
+      var url = (window.APP_URL || "").trim();
+      if (!url || url.indexOf("YOUR-APP-NAME") !== -1) {
+        document.getElementById("setup").hidden = false;
+      } else {
+        var frame = document.getElementById("app");
+        frame.src = url + (url.indexOf("?") === -1 ? "?" : "&") + "embed=true";
+        frame.hidden = false;
+      }
+      if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+    })();
+  </script>
+</body>
+</html>

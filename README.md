@@ -88,3 +88,29 @@ Before sharing the URL: set `app_password` in the secrets (the app shows custome
 send email), or make the app private in Streamlit's sharing settings. The "Local folder" source is
 hidden on the cloud because it would read the server's disk, not yours. Uploaded files are processed
 in memory and are not stored by the app.
+
+## Installing on a phone (PWA)
+
+The app ships a web-app manifest (`static/manifest.json`, name "מחשבון סנטפים", standalone display,
+icons from `static/`) and `pwa.py` links it into the page, so Chrome can install it. Streamlit only
+serves the `static/` folder (at `/app/static/`), which is why the manifest lives there and not in the
+project root; `enableStaticServing = true` in `.streamlit/config.toml` turns that on.
+
+**Android (Chrome):**
+1. Open the app's address in Chrome and let it finish loading (wait about five seconds).
+2. Tap the **⋮** menu at the top right.
+3. Tap **Install app** (or **Add to Home screen**, then **Install** in the dialog). Keep or edit the
+   name "סנטפים" and confirm.
+4. Open it from the new icon on the home screen: it starts full screen without the address bar.
+   If the menu only offers **Add shortcut**, the icon opens in a normal Chrome tab; see below.
+
+**If the installed app shows "Streamlit" or the default icon:** Community Cloud wraps every app in
+its own page, so it can ignore a manifest added from inside. Use the wrapper in `docs/` instead:
+1. Edit `docs/config.js` and put your app's address in `APP_URL`.
+2. Commit and push, then on GitHub: *Settings > Pages > Deploy from a branch > `main` / `docs`*.
+3. Open the Pages address (`https://<you>.github.io/<repo>/`) in Chrome on the phone and install
+   from there (steps above). The wrapper page owns the name and icon and shows your app full screen.
+   The app must be public (not "private/login") for this to work, because a login cannot run inside
+   the embedded frame.
+
+The app needs a live connection to its server, so it does not work offline.
