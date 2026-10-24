@@ -1,4 +1,4 @@
-"""Streamlit UI for the Santaf pergola panel calculator.
+"""Streamlit UI for Smart Pergola Management (ניהול פרגולות חכם): the Santaf calculator and the LED module.
 
 Run with:  streamlit run app.py
 """
@@ -19,7 +19,7 @@ import pdf_ingest
 import pwa
 import vision_ingest as vision
 
-st.set_page_config(page_title="מחשבון סנטפים", page_icon="icon.png", layout="wide")
+st.set_page_config(page_title="ניהול פרגולות חכם", page_icon="icon.png", layout="wide")
 
 # Streamlit re-runs this script on every interaction but keeps imported modules cached, so a
 # running server would otherwise keep using an old calculator.py after it is edited. Reload the
@@ -37,7 +37,7 @@ def extract_cached(images: list, layout: str, engine: str, _api_key: str = ""):
     return ocr.extract_orders(images, ocr.COLUMN_ORDERS[layout])
 
 
-st.title("Pergola Santaf Calculator")
+st.title("ניהול פרגולות חכם")
 
 
 def secret(name, default=None):
@@ -67,6 +67,24 @@ if secret("app_password") and not st.session_state.get("authenticated"):
     st.stop()
 
 ON_CLOUD = Path(__file__).resolve().as_posix().startswith("/mount/src")   # Streamlit Community Cloud
+
+# Module switch. The LED module is drawn by led_ui and then the script stops, so the Santaf
+# calculator below runs exactly as before when "סנטפים" (the default) is selected. The LED modules
+# are imported only here, so a problem in them can never stop the Santaf calculator from loading.
+MODULE_SANTAF, MODULE_LED = "סנטפים", "לדים"
+module = st.segmented_control("מודול", [MODULE_SANTAF, MODULE_LED], default=MODULE_SANTAF,
+                              key="module", label_visibility="collapsed")
+if module == MODULE_LED:
+    try:
+        import led
+        import led_ingest
+        import led_ui
+        for _led_module in (led_ingest, led, led_ui):          # pick up edits on a running server
+            importlib.reload(_led_module)
+        led_ui.render(on_cloud=ON_CLOUD)
+    except Exception as exc:                                    # st.stop / st.rerun are not Exceptions
+        st.error(f"מודול הלדים נכשל בטעינה: {exc}")
+    st.stop()
 IMAGE_TYPES = ["png", "jpg", "jpeg", "jfif"]
 ENGINE_LOCAL = "Local OCR (Tesseract) - stays on this computer"
 ENGINE_VISION = "AI vision (Claude) - most accurate, sends the photo to Anthropic"

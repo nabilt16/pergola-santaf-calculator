@@ -181,7 +181,7 @@ def build_report_html(title: str, period: str, metrics: Sequence[tuple[str, obje
 <div style="background:#2c3e50;padding:22px 28px"><h1 style="color:#fff;margin:0;font-size:22px">{_esc(title)}</h1>
 <p style="color:#bdc3c7;margin:8px 0 0;font-size:13px">{_esc(period)}</p></div>
 <div style="padding:28px">{note_html}<div style="display:flex;gap:14px;margin-bottom:18px;flex-wrap:wrap">{boxes}</div>{sections}</div>
-<div style="background:#f5f5f5;padding:14px 28px;text-align:center;font-size:12px;color:#999;border-top:1px solid #e0e0e0">מחשבון סנטפים לפרגולות</div>
+<div style="background:#f5f5f5;padding:14px 28px;text-align:center;font-size:12px;color:#999;border-top:1px solid #e0e0e0">ניהול פרגולות חכם</div>
 </div></body></html>"""
 
 

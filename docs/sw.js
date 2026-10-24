@@ -8,6 +8,6 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(fetch(event.request).catch(() => new Response(
     '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
     '<body dir="rtl" style="font-family:sans-serif;text-align:center;padding:3rem">' +
-    '<h2>אין חיבור לאינטרנט</h2><p>מחשבון הסנטפים דורש חיבור. נסו שוב כשיש קליטה.</p></body>',
+    '<h2>אין חיבור לאינטרנט</h2><p>ניהול פרגולות חכם דורש חיבור. נסו שוב כשיש קליטה.</p></body>',
     { headers: { "Content-Type": "text/html; charset=utf-8" } })));
 });

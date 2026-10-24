@@ -13,7 +13,7 @@ import json
 import streamlit as st
 
 STATIC_BASE = "app/static/"
-APP_NAME = "מחשבון סנטפים"
+APP_NAME = "ניהול פרגולות חכם"
 THEME_COLOR = "#2a78d6"
 
 
@@ -25,7 +25,7 @@ def head_script() -> str:
         {"tag": "meta", "name": "theme-color", "content": THEME_COLOR},
         {"tag": "meta", "name": "mobile-web-app-capable", "content": "yes"},
         {"tag": "meta", "name": "apple-mobile-web-app-capable", "content": "yes"},
-        {"tag": "meta", "name": "apple-mobile-web-app-title", "content": "סנטפים"},
+        {"tag": "meta", "name": "apple-mobile-web-app-title", "content": "פרגולות"},
     ]
     return f"""<script>
 (function () {{

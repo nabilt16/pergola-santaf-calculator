@@ -665,7 +665,7 @@ def _manifest(path):
 def test_manifest_is_installable(path):
     root = Path(__file__).resolve().parents[1]
     m = _manifest(root / path)
-    assert m["name"] == "מחשבון סנטפים" and m["short_name"] and m["display"] == "standalone"
+    assert m["name"] == "ניהול פרגולות חכם" and m["short_name"] and m["display"] == "standalone"
     assert m["lang"] == "he" and m["dir"] == "rtl" and m["start_url"] and m["theme_color"].startswith("#")
     from PIL import Image
     sizes = set()
