@@ -12,7 +12,7 @@ from __future__ import annotations
 import io
 import json
 import re
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import altair as alt
@@ -21,6 +21,7 @@ import streamlit as st
 
 import led
 import led_archive
+import led_autoload
 import led_ingest
 import warehouse
 from uploads import upload_types
@@ -30,6 +31,7 @@ DEFAULT_FOLDER = Path.home() / "Downloads" / "פרגולות"
 DEFAULT_WAREHOUSE_FILE = Path.home() / "Downloads" / "לדים ושנאים במחסן.xlsx"
 STORE = led.TrackingStore()
 NOT_LISTED = "לא ברשימת המחסן"
+IGNORE_THROUGH = date(2026, 10, 28)       # orders up to and including this day are handled and covered
 
 SRC_SAVED, SRC_NEW, SRC_FOLDER = "נתונים שמורים (היסטוריה)", "העלאת דוחות חדשים", "תיקייה במחשב"
 
@@ -231,7 +233,9 @@ def _filters(lines: pd.DataFrame) -> pd.DataFrame:
     with st.expander("סינון", expanded=True):
         first, last = lines["order_date"].min().date(), lines["order_date"].max().date()
         c1, c2 = st.columns(2)
-        start = c1.date_input("מתאריך", first, min_value=first, max_value=last,
+        # Orders up to 28/10/2026 are already handled and covered: the view starts on 29/10 (when there is data then)
+        opening = max(first, IGNORE_THROUGH + timedelta(days=1)) if last > IGNORE_THROUGH else first
+        start = c1.date_input("מתאריך", opening, min_value=first, max_value=last,
                               format="DD/MM/YYYY", key="led_from")
         end = c2.date_input("עד תאריך", last, min_value=first, max_value=last,
                             format="DD/MM/YYYY", key="led_to")
@@ -581,10 +585,30 @@ def _settings_tab(all_lines: pd.DataFrame, settings: led.LedSettings, archive: l
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
+def _autoload(archive: led_archive.Archive, on_cloud: bool) -> None:
+    """Save the LED reports and the warehouse list found in Downloads / the working folder (local runs only)."""
+    if on_cloud or st.session_state.get("_led_autoload_done"):
+        return
+    st.session_state["_led_autoload_done"] = True
+    try:
+        result = led_autoload.scan(archive)
+    except Exception as exc:                                # a problem here must never stop the module
+        st.warning(f"הטעינה האוטומטית נכשלה: {exc}")
+        return
+    if result.new_ids:
+        st.session_state["led_saved_pick"] = result.new_ids     # the saved view opens on what was just read
+    st.session_state["_led_autoload_msg"] = led_autoload.describe(result)
+    for name, why in result.errors.items():
+        st.warning(f"{name}: {why}")
+
+
 def render(on_cloud: bool = False) -> None:
     """Draw the LED module."""
     st.subheader("תאורת לד לפרגולות")
     archive = led_archive.Archive()
+    _autoload(archive, on_cloud)
+    if st.session_state.get("_led_autoload_msg"):
+        st.caption("טעינה אוטומטית: " + st.session_state["_led_autoload_msg"])
     raw = _load_reports(archive, on_cloud)
     if raw is None:
         return

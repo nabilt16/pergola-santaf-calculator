@@ -79,10 +79,11 @@ if module == MODULE_LED:
     try:
         import led
         import led_archive
+        import led_autoload
         import led_ingest
         import led_ui
         import warehouse
-        for _led_module in (led, led_ingest, warehouse, led_archive, led_ui):   # pick up edits on a running server
+        for _led_module in (led, led_ingest, warehouse, led_archive, led_autoload, led_ui):   # pick up edits on a running server
             importlib.reload(_led_module)
         led_ui.render(on_cloud=ON_CLOUD)
     except Exception as exc:                                    # st.stop / st.rerun are not Exceptions
