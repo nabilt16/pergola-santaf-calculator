@@ -23,6 +23,7 @@ import led
 import led_archive
 import led_ingest
 import warehouse
+from uploads import upload_types
 from pdf_ingest import PdfUnreadable
 
 DEFAULT_FOLDER = Path.home() / "Downloads" / "פרגולות"
@@ -105,7 +106,7 @@ def _saved_reports(archive: led_archive.Archive) -> pd.DataFrame | None:
 def _pick_files(folder_mode: bool) -> tuple:
     """The PDFs to read, as ((name, bytes), ...)."""
     if not folder_mode:
-        uploaded = st.file_uploader("דוחות לדים (PDF דיגיטלי)", type=["pdf", "PDF"],
+        uploaded = st.file_uploader("דוחות לדים (PDF דיגיטלי)", type=upload_types("pdf"),
                                     accept_multiple_files=True, key="led_upload")
         return tuple((f.name, f.getvalue()) for f in uploaded or [])
     folder = Path(st.text_input("נתיב התיקייה", str(DEFAULT_FOLDER), key="led_folder"))

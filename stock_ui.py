@@ -13,10 +13,12 @@ import streamlit as st
 
 import calculator as calc
 import pdf_ingest
+import stock_autoload
 import stock_plan as sp
 import stock_store
+from uploads import upload_types
 
-ORDER_TYPES = ["xlsx", "xls", "csv", "pdf", "PDF"]      # Excel first (the default); PDF also in capitals, as phones name it
+ORDER_TYPES = ["xlsx", "xls", "csv", "pdf"]            # Excel first (the default); the uploader adds the MIME types
 LABELS = {
     "date": "תאריך", "order_id": "הזמנה", "need_size": "מידה חסרה", "need_qty": "כמות חסרה", "donor": "מידת תורם",
     "panels_cut": "פנלים לחיתוך", "pieces_per_panel": "חלקים לפנל", "pieces_made": "חלקים שנוצרו",
@@ -54,13 +56,34 @@ def _read_orders_upload(upload) -> pd.DataFrame:
     return calc.load_orders(upload)
 
 
-def _data_section(store: stock_store.StockStore, settings: dict) -> None:
+def _autoload(store: stock_store.StockStore, settings: dict, on_cloud: bool, force: bool = False) -> None:
+    """Read the stock file and the order reports found in Downloads / the working folder (local runs only)."""
+    if on_cloud or not (force or not st.session_state.get("_autoload_done")):
+        return
+    st.session_state["_autoload_done"] = True
+    try:
+        report = stock_autoload.scan(store, zero_sizes=tuple(settings["zero_sizes"]))
+    except Exception as exc:                                # a problem here must never stop the module
+        st.warning(f"הטעינה האוטומטית נכשלה: {exc}")
+        return
+    st.session_state["_autoload_msg"] = stock_autoload.describe(report)
+    for name, why in report.errors.items():
+        st.warning(f"{name}: {why}")
+
+
+def _data_section(store: stock_store.StockStore, settings: dict, on_cloud: bool = False) -> None:
     saved_stock, saved_orders = store.load_stock(), store.load_orders()
     with st.expander("נתונים שמורים והעלאה", expanded=saved_stock is None or saved_orders is None):
         st.caption("הקבצים נשמרים בדיסק ונטענים אוטומטית בכל פתיחה. העלאה חדשה מתווספת לשמור (בלי כפילויות).")
+        if not on_cloud:
+            if st.button("סרוק את תיקיית ההורדות עכשיו", key="stock_scan"):
+                _autoload(store, settings, on_cloud, force=True)
+                st.rerun()
+            if st.session_state.get("_autoload_msg"):
+                st.info("טעינה אוטומטית: " + st.session_state["_autoload_msg"])
         left, right = st.columns(2)
-        stock_file = left.file_uploader("קובץ מלאי (Excel)", type=["xls", "xlsx"], key="stock_upload")
-        order_files = right.file_uploader("דוחות הזמנות סנטפים (PDF / Excel)", type=ORDER_TYPES,
+        stock_file = left.file_uploader("קובץ מלאי (Excel)", type=upload_types("xlsx", "xls"), key="stock_upload")
+        order_files = right.file_uploader("דוחות הזמנות סנטפים (PDF / Excel)", type=upload_types(*ORDER_TYPES),
                                           accept_multiple_files=True, key="stock_orders_upload")
         signature = (stock_file.name, stock_file.size) if stock_file else None
         if stock_file and st.session_state.get("_stock_seen") != signature:
@@ -97,7 +120,7 @@ def _backup_section(store: stock_store.StockStore, on_cloud: bool) -> None:
     if on_cloud:
         st.info("בענן הדיסק זמני: הורד גיבוי ושחזר אותו אחרי הפעלה מחדש של האפליקציה.")
     st.download_button("הורד גיבוי (zip)", store.export_zip(), file_name="stock-plan-backup.zip", key="stock_dl")
-    restore = st.file_uploader("שחזור מגיבוי", type=["zip"], key="stock_restore")
+    restore = st.file_uploader("שחזור מגיבוי", type=upload_types("zip"), key="stock_restore")
     if restore and st.session_state.get("_restore_seen") != (restore.name, restore.size):
         try:
             names = store.import_zip(restore.getvalue())
@@ -204,7 +227,8 @@ def render(on_cloud: bool = False) -> None:
     store = stock_store.StockStore()                       # re-read PERGOLA_DATA_DIR on every run
     st.subheader("תכנון מלאי סנטפים וחיתוך חכם")
     settings = _settings_row(store)
-    _data_section(store, settings)
+    _autoload(store, settings, on_cloud)
+    _data_section(store, settings, on_cloud)
     saved_stock, raw = store.load_stock(), store.load_orders()
     if saved_stock is None or raw is None:
         st.info("העלה קובץ מלאי ודוחות הזמנות. הם יישמרו ולא יידרשו שוב.")

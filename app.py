@@ -17,6 +17,7 @@ import email_report
 import ocr_ingest as ocr
 import pdf_ingest
 import pwa
+from uploads import upload_types
 import vision_ingest as vision
 
 st.set_page_config(page_title="ניהול פרגולות חכם", page_icon="icon.png", layout="wide")
@@ -89,10 +90,11 @@ if module == MODULE_LED:
     st.stop()
 if module == MODULE_STOCK:                                      # same isolation as the LED module
     try:
+        import stock_autoload
         import stock_plan
         import stock_store
         import stock_ui
-        for _stock_module in (stock_plan, stock_store, stock_ui):
+        for _stock_module in (stock_plan, stock_store, stock_autoload, stock_ui):
             importlib.reload(_stock_module)
         stock_ui.render(on_cloud=ON_CLOUD)
     except Exception as exc:
@@ -126,7 +128,7 @@ if source == "Excel / CSV file":
         )
 
 elif source == "PDF report":
-    pdfs = st.file_uploader("Upload digital PDF order reports", type=["pdf", "PDF"],
+    pdfs = st.file_uploader("Upload digital PDF order reports", type=upload_types("pdf"),
                             accept_multiple_files=True)
     if pdfs:
         try:

@@ -20,7 +20,8 @@ import pandas as pd
 import calculator as calc
 import stock_plan as sp
 
-NAMES = ("stock.json", "orders.csv", "orders_files.json", "settings.json", "last_run.json", "last_cuts.csv")
+NAMES = ("stock.json", "orders.csv", "orders_files.json", "settings.json", "last_run.json", "last_cuts.csv",
+         "autoload.json")
 MAX_IMPORT_BYTES = 50 * 1024 * 1024
 
 DEFAULT_SETTINGS = {

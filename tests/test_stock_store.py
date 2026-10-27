@@ -76,6 +76,9 @@ def test_bad_settings_file_and_backup_round_trip(tmp_path):
 def _app(tmp_path, monkeypatch):
     from streamlit.testing.v1 import AppTest
     monkeypatch.setenv("PERGOLA_DATA_DIR", str(tmp_path / "data"))
+    import os
+    if "PERGOLA_INBOX_DIRS" not in os.environ:                  # never read the real Downloads folder in a test
+        monkeypatch.setenv("PERGOLA_INBOX_DIRS", str(tmp_path / "no-files-here"))
     app = Path(__file__).resolve().parents[1] / "app.py"
     at = AppTest.from_file(str(app), default_timeout=90).run()
     at.segmented_control[0].set_value("מלאי סנטפים").run()
@@ -116,7 +119,7 @@ def test_santaf_defaults_to_pdf_and_stock_module_to_excel(tmp_path, monkeypatch)
     at = AppTest.from_file(str(app), default_timeout=90).run()
     assert not at.exception and at.radio[0].value == "PDF report"
     assert [u.label for u in at.file_uploader] == ["Upload digital PDF order reports"]
-    assert stock_ui.ORDER_TYPES[0] == "xlsx" and "PDF" in stock_ui.ORDER_TYPES        # Excel first, PDF in capitals too
+    assert stock_ui.ORDER_TYPES[0] == "xlsx" and "pdf" in stock_ui.ORDER_TYPES        # Excel first
     config = (Path(__file__).resolve().parents[1] / ".streamlit" / "config.toml").read_text(encoding="utf-8")
     assert "maxUploadSize = 200" in config
 
@@ -137,3 +140,67 @@ def test_a_pdf_from_a_phone_is_recognised_by_content(monkeypatch):
     for name in ("report", "REPORT.PDF"):
         stock_ui._read_orders_upload(Upload(name, b"%PDF-1.7 ..."))
     assert called == ["report", "REPORT.PDF"]
+
+
+# --------------------------------------------------------------------------- upload types for phones
+def test_upload_types_add_mime_types_next_to_extensions():
+    from uploads import upload_types
+    types = upload_types("pdf")
+    assert types[-1] == "pdf" and "application/pdf" in types
+    both = upload_types("xlsx", "xls", "csv")
+    assert "application/vnd.ms-excel" in both and "text/csv" in both and both[-3:] == ["xlsx", "xls", "csv"]
+    from streamlit.elements.lib.file_uploader_utils import normalize_upload_file_type
+    assert normalize_upload_file_type(types) == ["application/pdf", ".pdf"]
+
+
+# --------------------------------------------------------------------------- automatic loading from folders
+import stock_autoload as sa
+
+
+def _inbox(tmp_path):
+    folder = tmp_path / "Downloads"
+    folder.mkdir()
+    _stock_xlsx(folder / "מלא סנטפים (1).xlsx", [(1500, 5), (7000, 20)])
+    _orders_xlsx(folder / "דוח סנטפים נובמבר.xlsx", [("A", "2026-10-29", 3, 1000), ("B", "2026-10-30", 4, 1500)])
+    _orders_xlsx(folder / "something else.xlsx", [("Z", "2026-10-29", 9, 9000)])          # not Santaf: ignored
+    (folder / "~$דוח סנטפים.xlsx").write_bytes(b"lock")                                    # Office lock file: ignored
+    return folder
+
+
+def test_autoload_reads_the_files_once_and_copies_them_to_the_inbox(tmp_path):
+    folder, store = _inbox(tmp_path), ss.StockStore(tmp_path / "data" / "stock")
+    first = sa.scan(store, [folder])
+    assert first.stock == "מלא סנטפים (1).xlsx" and first.orders == ["דוח סנטפים נובמבר.xlsx"]
+    assert first.new_rows == 2 and not first.errors
+    assert store.load_stock()[0].quantities == {1000: 0, 1500: 5, 7000: 20}               # 1000 mm added with 0 units
+    assert store.load_orders()["order_id"].tolist() == ["A", "B"]
+    assert {p.name for p in (store.root / "inbox").iterdir()} == {"מלא סנטפים (1).xlsx", "דוח סנטפים נובמבר.xlsx"}
+    again = sa.scan(store, [folder])
+    assert not again.changed and again.unchanged == 2 and len(store.load_orders()) == 2    # nothing is read twice
+    assert "לא נמצאו קבצים חדשים" in sa.describe(again) and "מלאי:" in sa.describe(first)
+
+
+def test_autoload_takes_the_newest_stock_and_new_reports_and_survives_bad_files(tmp_path):
+    folder, store = _inbox(tmp_path), ss.StockStore(tmp_path / "data" / "stock")
+    sa.scan(store, [folder])
+    import os
+    newer = _stock_xlsx(folder / "מלאי סנטפים חדש.xlsx", [(1500, 9)])
+    os.utime(newer, (newer.stat().st_atime, newer.stat().st_mtime + 100))
+    _orders_xlsx(folder / "דוח סנטפים דצמבר.xlsx", [("C", "2026-11-02", 1, 2000)])
+    (folder / "דוח סנטפים שבור.pdf").write_bytes(b"not a pdf")
+    report = sa.scan(store, [folder])
+    assert report.stock == "מלאי סנטפים חדש.xlsx" and store.load_stock()[0].quantities[1500] == 9
+    assert report.orders == ["דוח סנטפים דצמבר.xlsx"] and list(report.errors) == ["דוח סנטפים שבור.pdf"]
+    assert store.load_orders()["order_id"].tolist() == ["A", "B", "C"]
+    assert sa.scan(store, [tmp_path / "nowhere"]).searched == [str(tmp_path / "nowhere")]  # a missing folder is fine
+
+
+def test_screen_loads_from_the_folder_without_any_upload(tmp_path, monkeypatch):
+    folder = _inbox(tmp_path)
+    monkeypatch.setenv("PERGOLA_INBOX_DIRS", str(folder))
+    at = _app(tmp_path, monkeypatch)                            # opens the stock module: the scan runs by itself
+    assert not at.exception, [e.value for e in at.exception]
+    assert {m.label: m.value for m in at.metric}["הזמנות פתוחות"] == "2"
+    assert any("טעינה אוטומטית" in i.value for i in at.info)
+    store = ss.StockStore(tmp_path / "data" / "stock")
+    assert store.load_stock() is not None and (store.root / "inbox").exists()
