@@ -218,7 +218,7 @@ def test_app_led_module_end_to_end(tmp_path, monkeypatch):
     assert not at.exception, [e.value for e in at.exception]
     at.file_uploader[0].set_value([("led.pdf", path.read_bytes(), "application/pdf")]).run()
     assert not at.exception, [e.value for e in at.exception]
-    assert [t.label for t in at.tabs][-7:] == ["סיכום", "שורות", "לפי הזמנה", "קיטים (הכנה)", "מחסן", "מעקב", "הגדרות"]
+    assert [t.label for t in at.tabs][-8:] == ["סיכום", "שורות", "לפי הזמנה", "קיטים (הכנה)", "מחסן", "הגעה לשחרור", "מעקב", "הגדרות"]
     assert any("תואמים" in s.value for s in at.success)                                # footer check
     assert any("נשמרו בהיסטוריה" in s.value for s in at.success)                       # saved to the archive
     assert "ניהול פרגולות חכם" in at.title[0].value
@@ -253,7 +253,7 @@ def test_led_opens_on_the_saved_reports_without_uploading(tmp_path, monkeypatch)
     fresh = session()                                                # a brand new session, nothing uploaded
     assert not fresh.exception
     assert fresh.radio[-1].value == "נתונים שמורים (היסטוריה)"
-    assert [t.label for t in fresh.tabs][-7:][0] == "סיכום"          # opened straight on the data
+    assert [t.label for t in fresh.tabs][-8:][0] == "סיכום"          # opened straight on the data
     shown = [d.value for d in fresh.dataframe if "הזמנה" in d.value.columns and "קוד" in d.value.columns]
     orders = set().union(*[set(d["הזמנה"]) for d in shown]) if shown else set()
     assert "999999" in orders and "839561" not in orders             # only the latest upload by default

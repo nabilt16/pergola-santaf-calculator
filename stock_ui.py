@@ -217,6 +217,79 @@ def _sizes_tab(sizes, plan) -> None:
                  hide_index=True, use_container_width=True)
 
 
+def _ids_from_upload(upload) -> str:
+    """The text of a list of order numbers: .txt/.csv as is, Excel cell by cell."""
+    name = upload.name.lower()
+    if name.endswith((".xlsx", ".xls")):
+        table = pd.read_excel(upload, header=None, dtype=str)
+        return " ".join(table.fillna("").astype(str).values.ravel())
+    return upload.getvalue().decode("utf-8-sig", errors="ignore")
+
+
+def _daily_tab(store, everything, orders, stock, effect) -> None:
+    st.markdown("**עדכון יומי: הזמנות שכבר קיבלו סנטפים מהמלאי**")
+    st.caption("פרגולה שמועד ההתקנה שלה עוד רחוק אבל כבר ניתנו לה סנטפים: סמן אותה כאן. היא יוצאת מהתור, והחומר "
+               "שלה יורד מהמלאי (אם הונפקה אחרי תאריך קובץ המלאי), ולכן ההזמנות הבאות, התקיעות והחיתוכים מחושבים מחדש.")
+    known = set(everything["order_id"])
+    queue = orders.set_index("order_id")
+    pasted = st.text_area("מספרי הזמנות (הדבק, מופרדים ברווח / פסיק / שורה)", key="stock_issue_text", height=90)
+    upload = st.file_uploader("או קובץ עם מספרי הזמנות (Excel / CSV)", type=upload_types("xlsx", "xls", "csv"),
+                              key="stock_issue_file")
+    picks = st.multiselect("או בחר מהתור הפתוח", list(queue.index), key="stock_issue_pick",
+                           format_func=lambda o: f"{o} · {_dmy(queue.loc[o, 'date'])} · {int(queue.loc[o, 'panels'])} פנלים")
+    text = pasted + (" " + _ids_from_upload(upload) if upload else "")
+    ids = list(dict.fromkeys([*sp.parse_order_ids(text), *picks]))
+    c1, c2 = st.columns([1, 2])
+    day = c1.date_input("הונפקו בתאריך", date.today(), format="DD/MM/YYYY", key="stock_issue_day")
+    note = c2.text_input("הערה (לא חובה)", key="stock_issue_note")
+    usable = [i for i in ids if i in known]
+    unknown = [i for i in ids if i not in known]
+    if ids:
+        st.write(f"זוהו {len(ids)} הזמנות: {len(usable)} בדוחות"
+                 + (f" · לא נמצאו בדוחות: {', '.join(unknown)}" if unknown else ""))
+    if st.button("סמן כמונפקו", disabled=not usable, key="stock_issue_go"):
+        try:
+            added = store.mark_issued(usable, day, note)
+            st.session_state["_issue_msg"] = f"סומנו {added} הזמנות חדשות"
+            for key in ("stock_issue_text", "stock_issue_pick", "stock_issue_note"):
+                st.session_state.pop(key, None)
+            st.rerun()
+        except stock_store.StoreError as exc:
+            st.error(str(exc))
+    if st.session_state.get("_issue_msg"):
+        st.success(st.session_state.pop("_issue_msg"))
+
+    table = effect.table
+    st.markdown(f"**הזמנות שסומנו כמונפקו ({len(table)})**")
+    if effect.unknown:
+        st.warning("סומנו הזמנות שאינן בדוחות שנטענו (לא ניתן לנכות את החומר שלהן): " + ", ".join(effect.unknown))
+    if effect.shortfall:
+        st.warning("הניכוי היה גדול מהמלאי במידות: "
+                   + ", ".join(f"{s} (חסרו {q})" for s, q in sorted(effect.shortfall.items()))
+                   + ". כנראה קובץ המלאי כבר מעודכן; בדוק את תאריך ההנפקה.")
+    if len(table):
+        shown = table.assign(order_date=table["order_date"].map(_dmy), issued_on=table["issued_on"].map(_dmy),
+                             deducted=table["deducted"].map({True: "כן", False: "לא (כבר במלאי)"}))
+        st.dataframe(shown.rename(columns={"order_id": "הזמנה", "order_date": "תאריך הזמנה", "issued_on": "הונפקה",
+                                           "panels": "פנלים", "demand": "דרישה", "deducted": "נוכתה מהמלאי",
+                                           "note": "הערה"}), hide_index=True, use_container_width=True)
+        undo = st.multiselect("ביטול סימון", list(table["order_id"]), key="stock_issue_undo")
+        if undo and st.button("בטל סימון", key="stock_issue_undo_go"):
+            store.unmark_issued(undo)
+            st.session_state.pop("stock_issue_undo", None)
+            st.rerun()
+    before, after = stock.quantities, effect.stock.quantities
+    moved = [{"מידה": s, "מלאי בקובץ": before.get(s, 0), "מלאי אחרי ניכוי": after.get(s, 0),
+              "ירד": before.get(s, 0) - after.get(s, 0)} for s in sorted(set(before) | set(after))
+             if before.get(s, 0) != after.get(s, 0)]
+    if moved:
+        st.markdown("**השפעה על המלאי**")
+        st.dataframe(pd.DataFrame(moved), hide_index=True, use_container_width=True)
+    st.info("עדכון יומי של הדוחות: דוח הזמנות חדש (גם מתיקיית ההורדות) מחליף את השורות של ההזמנות שהוא מכיל, "
+            "כך שהזמנה ששינתה תאריך או כמות לא נספרת פעמיים. קובץ מלאי חדש מחליף את הקודם, והסימונים שקדמו "
+            "לתאריכו מפסיקים לנכות מעצמם.")
+
+
 # --------------------------------------------------------------------------
 store = stock_store.StockStore()
 
@@ -241,18 +314,24 @@ def render(on_cloud: bool = False) -> None:
     stock.quantities = dict(sorted(stock.quantities.items()))
     try:
         panels = calc.process_orders(raw)
-        orders = sp.open_orders(sp.order_demand(panels), settings["start"], settings["end"])
+        everything = sp.order_demand(panels)
     except ValueError as exc:
         st.error(f"הנתונים השמורים לא עובדו: {exc}")
         return
+    # orders that already got their panels (daily update) leave the queue; those issued after the stock date
+    # also take their material out of the stock
+    issued = store.issued()
+    effect = sp.apply_issued(everything, stock, issued)
+    stock_now = effect.stock
+    orders = sp.drop_orders(sp.open_orders(everything, settings["start"], settings["end"]), issued)
     if orders.empty:
         st.warning("אין הזמנות בטווח התאריכים שנבחר.")
         return
     skip, kerf = settings["skip_stuck"], settings["kerf_mm"]
-    base = sp.simulate(orders, stock, skip_stuck=skip)
-    res, cuts = sp.simulate_with_cuts(orders, stock, skip_stuck=skip, kerf_mm=kerf)
-    problems = sp.verify_cuts(orders, stock, res, cuts, base)
-    sizes = sp.classify_sizes(sp.size_table(orders, stock, base))
+    base = sp.simulate(orders, stock_now, skip_stuck=skip)
+    res, cuts = sp.simulate_with_cuts(orders, stock_now, skip_stuck=skip, kerf_mm=kerf)
+    problems = sp.verify_cuts(orders, stock_now, res, cuts, base)
+    sizes = sp.classify_sizes(sp.size_table(orders, stock_now, base))
     plan = sp.purchase_plan(sizes, settings["buffer_days"])
     f1 = sp.findings(res)
     try:
@@ -263,12 +342,18 @@ def render(on_cloud: bool = False) -> None:
         pass
     st.caption(f"מלאי נכון ל-{_dmy(stock.as_of)} · הזמנות מ-{_dmy(settings['start'])} עד {_dmy(settings['end'])} "
                f"(הזמנות קודמות כבר יצאו ולא נספרות)")
-    tabs = st.tabs(["תוכנית חיתוך חכמה", "הזמנות", "מידות ורכש", "גיבוי"])
+    if len(effect.table):
+        deducted = int(effect.table.loc[effect.table["deducted"], "panels"].sum())
+        st.caption(f"עדכון יומי: {len(effect.table)} הזמנות כבר קיבלו סנטפים והוסרו מהתור; "
+                   f"{deducted} פנלים נוכו מהמלאי (הזמנות שהונפקו אחרי תאריך המלאי).")
+    tabs = st.tabs(["תוכנית חיתוך חכמה", "עדכון יומי", "הזמנות", "מידות ורכש", "גיבוי"])
     with tabs[0]:
-        _cut_tab(res, cuts, base, orders, stock, problems)
+        _cut_tab(res, cuts, base, orders, stock_now, problems)
     with tabs[1]:
-        _orders_tab(res)
+        _daily_tab(store, everything, orders, stock, effect)
     with tabs[2]:
-        _sizes_tab(sizes, plan)
+        _orders_tab(res)
     with tabs[3]:
+        _sizes_tab(sizes, plan)
+    with tabs[4]:
         _backup_section(store, on_cloud)

@@ -462,3 +462,57 @@ def verify_cuts(orders: pd.DataFrame, stock: Stock, result: pd.DataFrame, cuts: 
 def cut_report(cuts: pd.DataFrame) -> list[str]:
     """The operational recommendations, in release order."""
     return [f"{row.date:%d/%m/%Y} | הזמנה {row.order_id} | {row.instruction}" for row in cuts.itertuples()]
+
+
+# --------------------------------------------------------------------------
+# Daily updates: orders that already received their panels from the stock
+# --------------------------------------------------------------------------
+@dataclass
+class IssuedEffect:
+    stock: Stock                                   # the stock after taking the issued orders' material out
+    table: pd.DataFrame                            # one row per marked order
+    unknown: list[str]                             # marked orders that are not in the loaded reports
+    shortfall: dict[int, int]                      # sizes where the deduction needed more than the stock had
+
+
+def parse_order_ids(text: str) -> list[str]:
+    """Order numbers (6 digits) found in pasted text, in order, without repeats."""
+    return list(dict.fromkeys(re.findall(r"(?<!\d)\d{6}(?!\d)", str(text))))
+
+
+def apply_issued(orders: pd.DataFrame, stock: Stock, issued: dict[str, dict]) -> IssuedEffect:
+    """Take the orders that already got panels out of the picture.
+
+    `orders` is order_demand() of ALL loaded orders (any date) and `issued` maps order id to {"issued_on": date}.
+    An order issued AFTER the stock date used material the stock file still shows, so its panels are deducted;
+    one issued on or before the stock date is already in the stock count and only leaves the queue. A deduction
+    never takes a size below 0 (`shortfall` says where the stock did not cover it).
+    """
+    by_id = orders.set_index("order_id")
+    quantities = dict(stock.quantities)
+    rows, unknown, shortfall = [], [], {}
+    for order_id, info in sorted(issued.items(), key=lambda kv: (kv[1].get("issued_on", ""), kv[0])):
+        if order_id not in by_id.index:
+            unknown.append(order_id)
+            continue
+        issued_on = pd.Timestamp(info["issued_on"]) if info.get("issued_on") else None
+        deduct = stock.as_of is None or issued_on is None or issued_on > stock.as_of
+        demand = by_id.loc[order_id, "demand"]
+        if deduct:
+            for size, qty in demand.items():
+                have = quantities.get(size, 0)
+                if qty > have:
+                    shortfall[size] = shortfall.get(size, 0) + qty - have
+                quantities[size] = max(0, have - qty)
+        rows.append({"order_id": order_id, "order_date": by_id.loc[order_id, "date"], "issued_on": issued_on,
+                     "panels": int(by_id.loc[order_id, "panels"]), "demand": _describe(demand),
+                     "deducted": bool(deduct), "note": info.get("note", "")})
+    table = pd.DataFrame(rows, columns=["order_id", "order_date", "issued_on", "panels", "demand", "deducted", "note"])
+    return IssuedEffect(Stock(dict(sorted(quantities.items())), stock.as_of, stock.zero_added), table, unknown, shortfall)
+
+
+def drop_orders(orders: pd.DataFrame, order_ids) -> pd.DataFrame:
+    """The queue without these orders, renumbered from 1."""
+    kept = orders[~orders["order_id"].isin(set(order_ids))].reset_index(drop=True).copy()
+    kept["seq"] = range(1, len(kept) + 1)
+    return kept

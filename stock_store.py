@@ -21,7 +21,7 @@ import calculator as calc
 import stock_plan as sp
 
 NAMES = ("stock.json", "orders.csv", "orders_files.json", "settings.json", "last_run.json", "last_cuts.csv",
-         "autoload.json")
+         "autoload.json", "issued.json")
 MAX_IMPORT_BYTES = 50 * 1024 * 1024
 
 DEFAULT_SETTINGS = {
@@ -37,6 +37,26 @@ class StoreError(RuntimeError):
 def default_dir() -> Path:
     base = Path(os.environ.get("PERGOLA_DATA_DIR") or (Path(__file__).resolve().parent / "data"))
     return base / "stock"
+
+
+def replace_orders(saved: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
+    """A newer report wins for the orders it contains: their old lines are replaced (in the same place, so the
+    order of the report is kept) and orders the new report does not mention stay as they were.
+
+    This is how a daily update works: an order whose date or quantity changed is not counted twice.
+    """
+    new_ids = set(new["order_id"])
+    by_order = {oid: group for oid, group in new.groupby("order_id", sort=False)}
+    parts, emitted = [], set()
+    for oid, group in saved.groupby("order_id", sort=False):
+        if oid in new_ids:
+            if oid not in emitted:
+                parts.append(by_order[oid])
+                emitted.add(oid)
+        else:
+            parts.append(group)
+    parts += [group for oid, group in by_order.items() if oid not in emitted and oid not in set(saved["order_id"])]
+    return pd.concat(parts, ignore_index=True) if parts else saved
 
 
 def merge_orders(frames: list[pd.DataFrame]) -> pd.DataFrame:
@@ -87,8 +107,13 @@ class StockStore:
         """Merge a newly read report into the saved orders. Returns how many lines were new."""
         frame = calc.normalize_columns(frame).astype(str).reset_index(drop=True)
         saved = self.load_orders()
-        merged = merge_orders([saved, frame]) if saved is not None else frame
+        merged = replace_orders(saved, frame) if saved is not None else frame
         added = len(merged) - (len(saved) if saved is not None else 0)
+        changed = 0
+        if saved is not None:
+            old = {oid: g.drop(columns="order_id").astype(str).values.tolist() for oid, g in saved.groupby("order_id")}
+            changed = sum(1 for oid, g in frame.groupby("order_id")
+                          if oid in old and old[oid] != g.drop(columns="order_id").astype(str).values.tolist())
         try:
             self.root.mkdir(parents=True, exist_ok=True)
             temp = self.root / "orders.csv.tmp"
@@ -97,7 +122,7 @@ class StockStore:
         except OSError as exc:
             raise StoreError("אי אפשר לכתוב לדיסק בסביבה הזו") from exc
         files = self._read_json("orders_files.json", [])
-        files.append({"name": file_name, "rows": int(len(frame)), "new_rows": int(added),
+        files.append({"name": file_name, "rows": int(len(frame)), "new_rows": int(added), "changed_orders": int(changed),
                       "saved_at": datetime.now().isoformat(timespec="seconds")})
         self._write("orders_files.json", json.dumps(files, ensure_ascii=False, indent=1))
         return added
@@ -111,6 +136,27 @@ class StockStore:
 
     def orders_files(self) -> list[dict]:
         return self._read_json("orders_files.json", [])
+
+    # ---- orders that already received panels (daily update)
+    def issued(self) -> dict[str, dict]:
+        """{order_id: {"issued_on": "YYYY-MM-DD", "note": str}}: orders that got their panels from the stock."""
+        raw = self._read_json("issued.json", {})
+        return raw if isinstance(raw, dict) else {}
+
+    def mark_issued(self, order_ids, issued_on, note: str = "") -> int:
+        current, day = self.issued(), pd.Timestamp(issued_on).strftime("%Y-%m-%d")
+        added = 0
+        for oid in order_ids:
+            added += oid not in current
+            current[str(oid)] = {"issued_on": day, "note": note}
+        self._write("issued.json", json.dumps(current, ensure_ascii=False, indent=1))
+        return added
+
+    def unmark_issued(self, order_ids) -> None:
+        current = self.issued()
+        for oid in order_ids:
+            current.pop(str(oid), None)
+        self._write("issued.json", json.dumps(current, ensure_ascii=False, indent=1))
 
     # ---- settings and the last run
     def load_settings(self) -> dict:

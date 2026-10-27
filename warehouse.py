@@ -15,8 +15,10 @@ calibration), so the allocation rule can be tuned as the rest of the list arrive
 from __future__ import annotations
 
 import io
+import json
 import re
 from collections import Counter
+from pathlib import Path
 
 import pandas as pd
 
@@ -106,15 +108,17 @@ def merge_warehouse(frames: list[pd.DataFrame]) -> pd.DataFrame:
 IN_LIST = "ברשימת המחסן"
 IN_LIST_VIA_MAIN = "ברשימת המחסן (הזמנה ראשית)"
 REPORT_ONLY = "הדוח: במחסן, לא ברשימה"
+MANUAL = "הגיע למחסן (סומן ידנית)"
 
 
-def annotate_lines(lines: pd.DataFrame, warehouse: pd.DataFrame | None) -> pd.DataFrame:
+def annotate_lines(lines: pd.DataFrame, warehouse: pd.DataFrame | None, manual=()) -> pd.DataFrame:
     """Add `warehouse_state`, `wh_alloc`, `wh_alloc_w` to the (prepared) report lines.
 
     An order counts as being in the warehouse list when its own number is listed, or when its note names a
     main order that is listed. A report line marked "במחסן" that the list does not (yet) contain is shown
-    as not verified because the list is partial.
+    as not verified because the list is partial. `manual` holds orders marked by hand as arrived.
     """
+    manual = set(manual)
     out = lines.copy()
     by_order: dict[str, list[tuple[str, float]]] = {}
     if warehouse is not None and not warehouse.empty:
@@ -129,6 +133,8 @@ def annotate_lines(lines: pd.DataFrame, warehouse: pd.DataFrame | None) -> pd.Da
             state.append(IN_LIST)
         elif via_main:
             state.append(IN_LIST_VIA_MAIN)
+        elif row.order_id in manual or (row.main_order and row.main_order in manual):
+            state.append(MANUAL)
         elif row.status_key == "in_warehouse":
             state.append(REPORT_ONLY)
         else:
@@ -219,3 +225,90 @@ def stock_summary(warehouse: pd.DataFrame) -> pd.DataFrame:
             orders.setdefault(float(unit), set()).add(row.order_id)
     return pd.DataFrame([{"rating_w": w, "units": n, "orders": len(orders[w])} for w, n in sorted(units.items())],
                         columns=["rating_w", "units", "orders"])
+
+
+# --------------------------------------------------------------------------
+# Arrival at the warehouse: daily updates and early release of future orders
+# --------------------------------------------------------------------------
+class ArrivalStore:
+    """Orders whose LEDs / kit were marked by hand as arrived at the warehouse: {order_id: "YYYY-MM-DD"}.
+
+    The warehouse list says the same thing once it is updated; this is the quick way to say it the day it happens.
+    """
+
+    def __init__(self, path=None):
+        self.path = Path(path) if path else led.DATA_DIR / "led_arrivals.json"
+
+    def arrived(self) -> dict[str, str]:
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+
+    def _write(self, data: dict) -> bool:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temp = self.path.with_suffix(".tmp")
+            temp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+            temp.replace(self.path)
+            return True
+        except OSError:
+            return False
+
+    def mark(self, order_ids, day) -> int:
+        current, iso = self.arrived(), pd.Timestamp(day).strftime("%Y-%m-%d")
+        added = sum(1 for oid in order_ids if oid not in current)
+        current.update({str(oid): iso for oid in order_ids})
+        return added if self._write(current) else 0
+
+    def unmark(self, order_ids) -> None:
+        current = self.arrived()
+        for oid in order_ids:
+            current.pop(str(oid), None)
+        self._write(current)
+
+
+def arrival_dates(lists: list[tuple[str, pd.DataFrame]]) -> pd.DataFrame:
+    """When each listed order first showed up in a saved warehouse list.
+
+    `lists` is [(date saved "YYYY-MM-DD", list frame)] oldest first. The first list is the starting point
+    (`baseline`): its orders were there before the updates began, so their real arrival day is unknown.
+    """
+    seen: dict[str, tuple[str, bool]] = {}
+    for index, (day, frame) in enumerate(lists):
+        for order_id in frame["order_id"]:
+            seen.setdefault(order_id, (day, index == 0))
+    return pd.DataFrame([{"order_id": o, "arrived_on": pd.Timestamp(d), "baseline": b} for o, (d, b) in seen.items()],
+                        columns=["order_id", "arrived_on", "baseline"])
+
+
+def early_release(lines: pd.DataFrame, arrivals: pd.DataFrame, manual: dict[str, str], today,
+                  soon_days: int = 7) -> dict[str, pd.DataFrame]:
+    """Cross the arrived kits with the orders still to come (one row per order, not yet supplied, not cancelled).
+
+    ready   - kit already in the warehouse (list or marked by hand) and the order date is still ahead: can be
+              released early;
+    waiting - the order is due within `soon_days` (or is late) and no kit has arrived.
+    """
+    today = pd.Timestamp(today).normalize()
+    active = lines[(lines["status_key"] != "cancelled") & (lines["stage"] != "סופק")]
+    rows = []
+    listed = arrivals.set_index("order_id")["arrived_on"].to_dict() if len(arrivals) else {}
+    for order_id, group in active.groupby("order_id"):
+        state = next((s for s in group["warehouse_state"] if s), "")
+        via = group["main_order"].iloc[0] if group["main_order"].iloc[0] else ""
+        arrived_on = (pd.Timestamp(manual[order_id]) if order_id in manual else
+                      listed.get(order_id) if order_id in listed else
+                      pd.Timestamp(manual[via]) if via in manual else listed.get(via))
+        rows.append({"order_id": order_id, "order_date": group["order_date"].min(),
+                     "days_ahead": int((group["order_date"].min().normalize() - today).days),
+                     "arrived": state in (IN_LIST, IN_LIST_VIA_MAIN, MANUAL), "arrived_on": arrived_on,
+                     "wh_alloc": " ; ".join(sorted({a for a in group["wh_alloc"] if a})),
+                     "meters": round(float(group["meters"].sum()), 2), "stage": ", ".join(sorted(set(group["stage"]))),
+                     "state": state})
+    table = pd.DataFrame(rows, columns=["order_id", "order_date", "days_ahead", "arrived", "arrived_on", "wh_alloc",
+                                        "meters", "stage", "state"])
+    ready = table[table["arrived"] & (table["days_ahead"] > 0)].sort_values(["order_date", "order_id"])
+    waiting = table[~table["arrived"] & (table["days_ahead"] <= soon_days)].sort_values(["order_date", "order_id"])
+    return {"all": table, "ready": ready.reset_index(drop=True), "waiting": waiting.reset_index(drop=True)}

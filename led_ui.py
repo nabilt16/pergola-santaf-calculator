@@ -473,6 +473,82 @@ def _warehouse_tab(lines: pd.DataFrame, wh: pd.DataFrame | None, settings: led.L
                  hide_index=True, width="stretch")
 
 
+def _arrival_tab(lines: pd.DataFrame, archive: led_archive.Archive, arrivals_store: warehouse.ArrivalStore) -> None:
+    """Daily view: which kits reached the warehouse, and which future orders can therefore be released early."""
+    st.caption("כשקיט או לדים מגיעים פיזית למחסן אפשר לשחרר מוקדם הזמנות עתידיות. ההגעה נקראת מרשימת המחסן "
+               "(כל רשימה מעודכנת שנטענת מוסיפה את מה שהגיע), או שמסמנים אותה כאן ידנית באותו יום.")
+    today = pd.Timestamp(st.date_input("תאריך היום", date.today(), format="DD/MM/YYYY", key="led_today"))
+    lists = []
+    for entry in sorted(archive.entries("warehouse"), key=lambda e: e["saved_at"]):
+        try:
+            lists.append((entry["saved_at"][:10], archive.load("warehouse", entry["id"])))
+        except (OSError, ValueError, KeyError):
+            continue
+    arrivals = warehouse.arrival_dates(lists) if lists else warehouse.arrival_dates([])
+    manual = arrivals_store.arrived()
+    result = warehouse.early_release(lines, arrivals, manual, today)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("קיט במחסן (הזמנות עתידיות)", len(result["ready"]))
+    c2.metric("ממתינות לקיט (עד שבוע)", len(result["waiting"]))
+    new_today = arrivals[(~arrivals["baseline"]) & (arrivals["arrived_on"] >= today - pd.Timedelta(days=1))]
+    c3.metric("הגיעו היום / אתמול", len(new_today) + sum(1 for d in manual.values()
+                                                       if pd.Timestamp(d) >= today - pd.Timedelta(days=1)))
+
+    st.markdown("**ניתן לשחרר מוקדם: הקיט כבר במחסן והתאריך עוד לפנינו**")
+    ready = result["ready"]
+    if ready.empty:
+        st.info("אין כרגע הזמנות עתידיות שהקיט שלהן במחסן.")
+    else:
+        _arrival_table(ready)
+    st.markdown("**ממתינות לקיט: מועד ההזמנה בתוך שבוע (או עבר) והקיט עדיין לא הגיע**")
+    if result["waiting"].empty:
+        st.success("אין הזמנות קרובות שמחכות לקיט.")
+    else:
+        _arrival_table(result["waiting"])
+
+    st.markdown("**סימון הגעה ידני**")
+    pasted = st.text_area("מספרי הזמנות שהקיט שלהן הגיע למחסן (הדבק)", key="led_arrival_text", height=80)
+    ids = [i for i in dict.fromkeys(re.findall(r"(?<!\d)\d{6}(?!\d)", pasted))]
+    known = set(lines["order_id"])
+    day = st.date_input("הגיעו בתאריך", date.today(), format="DD/MM/YYYY", key="led_arrival_day")
+    unknown = [i for i in ids if i not in known]
+    if ids:
+        st.write(f"זוהו {len(ids)} הזמנות" + (f" · לא נמצאו בדוחות: {', '.join(unknown)}" if unknown else ""))
+    if st.button("סמן כהגיעו", disabled=not ids, key="led_arrival_go"):
+        added = arrivals_store.mark(ids, day)
+        st.session_state["_led_arrival_msg"] = f"סומנו {added} הזמנות חדשות"
+        st.session_state.pop("led_arrival_text", None)
+        st.rerun()
+    if st.session_state.get("_led_arrival_msg"):
+        st.success(st.session_state.pop("_led_arrival_msg"))
+    if manual:
+        undo = st.multiselect("סימונים ידניים (בחר לביטול)", sorted(manual), key="led_arrival_undo",
+                              format_func=lambda o: f"{o} · {_dmy(manual[o])}")
+        if undo and st.button("בטל סימון", key="led_arrival_undo_go"):
+            arrivals_store.unmark(undo)
+            st.session_state.pop("led_arrival_undo", None)
+            st.rerun()
+
+    st.markdown("**הגעות לפי יום (מרשימות המחסן השמורות)**")
+    daily = arrivals[~arrivals["baseline"]]
+    if daily.empty:
+        st.caption("עדיין אין עדכון יומי: הרשימה הראשונה היא נקודת ההתחלה. כל רשימה מעודכנת שתיטען תציג כאן מה הגיע.")
+    else:
+        per_day = daily.groupby(daily["arrived_on"].dt.strftime("%d/%m/%Y")).agg(
+            הזמנות=("order_id", "size"), מספרים=("order_id", lambda s: ", ".join(s))).reset_index(names="תאריך")
+        st.dataframe(per_day, hide_index=True, width="stretch")
+
+
+def _arrival_table(frame: pd.DataFrame) -> None:
+    shown = frame.assign(order_date=frame["order_date"].dt.strftime("%d/%m/%Y"),
+                         arrived_on=frame["arrived_on"].map(lambda d: "" if pd.isna(d) else pd.Timestamp(d).strftime("%d/%m/%Y")),
+                         arrived=frame["arrived"].map({True: "כן", False: "לא"}))
+    st.dataframe(shown[["order_id", "order_date", "days_ahead", "arrived", "arrived_on", "wh_alloc", "meters", "stage"]]
+                 .rename(columns={"order_id": "הזמנה", "order_date": "תאריך הזמנה", "days_ahead": "ימים קדימה",
+                                  "arrived": "במחסן", "arrived_on": "הגיע ב", "wh_alloc": "הקצאה במחסן",
+                                  "meters": "מטרי לד", "stage": "שלב"}), hide_index=True, width="stretch")
+
+
 def _tracking_tab(lines: pd.DataFrame) -> None:
     if lines.empty:
         st.info("אין שורות להצגה בסינון הנוכחי.")
@@ -615,7 +691,8 @@ def render(on_cloud: bool = False) -> None:
 
     settings = _settings()
     wh = _warehouse_list(archive)
-    lines = warehouse.annotate_lines(led.prepare(raw, settings), wh)
+    arrivals_store = warehouse.ArrivalStore()
+    lines = warehouse.annotate_lines(led.prepare(raw, settings), wh, manual=arrivals_store.arrived())
     lines["warehouse_label"] = lines["warehouse_state"].replace("", NOT_LISTED)
     view = _filters(lines)
     searched = str(st.session_state.get("led_search", "")).strip()
@@ -623,7 +700,7 @@ def render(on_cloud: bool = False) -> None:
         _search_elsewhere(searched, archive, wh)
     elif view.empty:
         st.warning("אין שורות שמתאימות לסינון.")
-    tabs = st.tabs(["סיכום", "שורות", "לפי הזמנה", "קיטים (הכנה)", "מחסן", "מעקב", "הגדרות"])
+    tabs = st.tabs(["סיכום", "שורות", "לפי הזמנה", "קיטים (הכנה)", "מחסן", "הגעה לשחרור", "מעקב", "הגדרות"])
     with tabs[0]:
         if not view.empty:
             _summary(view)
@@ -639,6 +716,8 @@ def render(on_cloud: bool = False) -> None:
     with tabs[4]:
         _warehouse_tab(lines, wh, settings, archive, on_cloud)
     with tabs[5]:
-        _tracking_tab(view if not view.empty else lines.iloc[0:0])
+        _arrival_tab(lines, archive, arrivals_store)
     with tabs[6]:
+        _tracking_tab(view if not view.empty else lines.iloc[0:0])
+    with tabs[7]:
         _settings_tab(lines, settings, archive)
