@@ -102,10 +102,11 @@ def test_strip_splitting_rule():
 
 def test_transformer_80_percent_rule():
     assert led.usable_watts(60) == 48 and led.usable_watts(500) == 400
-    assert led.choose_transformer(48) == 60 and led.choose_transformer(48.1) == 100
-    assert led.choose_transformer(80) == 100 and led.choose_transformer(80.1) == 250
-    assert led.choose_transformer(200) == 250 and led.choose_transformer(200.1) == 500
-    assert led.choose_transformer(400) == 500 and led.choose_transformer(400.1) is None
+    assert led.TRANSFORMER_RATINGS == (60, 100, 150, 200, 250, 500)         # the sizes of the warehouse records
+    for load, rating in [(48, 60), (48.1, 100), (80, 100), (80.1, 150), (120, 150), (120.1, 200), (160, 200),
+                         (160.1, 250), (200, 250), (200.1, 500), (400, 500)]:
+        assert led.choose_transformer(load) == rating, load
+    assert led.choose_transformer(400.1) is None
     assert led.WATTS_PER_METER == 12 and led.LedSettings().watts_per_meter == 12
     assert led.strip_watts(4000, 12) == 48 and led.strip_watts(1000, 12) == 12
     plan = led.plan_transformers([48.0] * 9)                             # 432 W does not fit one 500 W unit
@@ -114,7 +115,7 @@ def test_transformer_80_percent_rule():
     table = led.transformer_table().set_index("rating_w")                # safety margin per rating
     assert table.loc[60, "safe_load_w"] == 48 and table.loc[60, "max_meters"] == 4.0
     assert table.loc[60, "max_full_strips"] == 1 and table.loc[250, "max_full_strips"] == 4
-    assert table.loc[500, "safe_load_w"] == 400
+    assert table.loc[150, "safe_load_w"] == 120 and table.loc[500, "safe_load_w"] == 400
 
 
 def _order_lines(*lengths):
@@ -129,12 +130,15 @@ def test_cob_strip_examples_from_the_specification():
     assert kit["watts"] == 48 and kit["meters"] == 4.0 and kit["strips"] == 1
     assert [t["rating"] for t in kit["transformers"]] == [60]
     assert kit["transformers"][0]["load_pct"] == 100.0 and kit["transformers"][0]["headroom_w"] == 0
-    # mixed lengths on one order add up to 9.5 m = 114 W on one central 250 W transformer
+    # mixed lengths on one order add up to 9.5 m = 114 W, on ONE central transformer: the 150 W unit
+    # of the warehouse (its safe load is 120 W); without a 150 W unit the same load needs the 250 W one
     kit = led.kit_for_order(_order_lines(4000, 2500, 2000, 1000))
     assert kit["meters"] == 9.5 and kit["watts"] == 114 and kit["strips"] == 4
-    assert [t["rating"] for t in kit["transformers"]] == [250]
-    assert kit["transformers"][0]["load_w"] == 114 and kit["transformers"][0]["headroom_w"] == 86
-    assert kit["transformers"][0]["load_pct"] == 57.0
+    assert [t["rating"] for t in kit["transformers"]] == [150]
+    assert kit["transformers"][0]["load_w"] == 114 and kit["transformers"][0]["headroom_w"] == 6
+    assert kit["transformers"][0]["load_pct"] == 95.0
+    no_150 = led.LedSettings(transformer_ratings=(60, 100, 200, 250, 500))
+    assert [t["rating"] for t in led.kit_for_order(_order_lines(4000, 2500, 2000, 1000), no_150)["transformers"]] == [200]
     # quantities multiply: 3 x 2000 mm = 6 m = 72 W
     many = pd.DataFrame({"order_id": ["1"], "code": [6], "length_mm": [2000], "quantity": [3],
                          "status_key": ["produced"]})
@@ -142,6 +146,7 @@ def test_cob_strip_examples_from_the_specification():
     # a very long run is split into 4 m pieces and shared between transformers when it must be
     big = led.kit_for_order(_order_lines(12000, 12000, 12000))          # 36 m = 432 W
     assert big["strips"] == 9 and big["watts"] == 432 and len(big["transformers"]) == 2
+    assert led.format_allocation([t["rating"] for t in big["transformers"]]) == "1*60W+1*500W"
     assert all(t["load_w"] <= led.usable_watts(t["rating"]) for t in big["transformers"])
 
 
@@ -159,9 +164,10 @@ def _table():
 
 
 def test_prepare_kits_and_summary():
-    settings = led.LedSettings(zone_regions={"20": "צפון", "70": "מרכז"})
+    settings = led.LedSettings()
     d = led.prepare(_table(), settings)
-    assert d["region"].tolist() == ["צפון", "צפון", "מרכז", led.UNASSIGNED, "צפון"]
+    assert d["region"].tolist() == ["צפון", "צפון", "מרכז", "דרום", "צפון"]      # built-in zone mapping
+    assert d["area"].tolist() == ["חיפה", "חיפה", "מרכז", "שדרות", "חיפה"]
     assert d["order_type"].tolist()[0] == "פרגולה מלאה" and "שירות" in d["order_type"].tolist()[2]
     assert d["stage"].tolist() == ["הוזמן", "הוזמן", "נתקבל", "סופק", "טרם הוזמן"]
     assert "יפוצל" in d["issue"][0] and "אין פרטי לד" in d["issue"][3] and "בוטל" in d["issue"][4]
@@ -172,11 +178,11 @@ def test_prepare_kits_and_summary():
     assert "3" not in kits.index and "4" not in kits.index              # no details / cancelled
     assert kits.loc["1", "pieces"] == "4×2000, 1×4000"                   # 6000 -> 4000 + 2000
     assert kits.loc["1", "strips"] == 5 and kits.loc["1", "meters"] == 12.0
-    assert kits.loc["1", "watts"] == 144 and kits.loc["1", "load_pct"] == 72.0     # 12 m at 12 W/m
-    assert kits.loc["1", "transformers"] == "250W" and kits.loc["2", "transformers"] == "100W"
+    assert kits.loc["1", "watts"] == 144 and kits.loc["1", "load_pct"] == 90.0     # 12 m at 12 W/m on 200 W
+    assert kits.loc["1", "transformers"] == "1*200W" and kits.loc["2", "transformers"] == "1*100W"
     assert kits.loc["2", "watts"] == 72 and kits.loc["2", "load_pct"] == 90.0
     demand = led.inventory_demand(d, settings)
-    assert demand["strips"] == {2000: 4, 3000: 2, 4000: 1} and demand["transformers"] == {100: 1, 250: 1}
+    assert demand["strips"] == {2000: 4, 3000: 2, 4000: 1} and demand["transformers"] == {100: 1, 200: 1}
 
 
 def test_tracking_store_and_settings_roundtrip(tmp_path):
@@ -200,8 +206,9 @@ def test_tracking_store_and_settings_roundtrip(tmp_path):
     assert led.load_settings(old).watts_per_meter == 12.0                  # old fields ignored, new default used
 
 
-def test_app_led_module_end_to_end(tmp_path):
+def test_app_led_module_end_to_end(tmp_path, monkeypatch):
     from streamlit.testing.v1 import AppTest
+    monkeypatch.setenv("PERGOLA_DATA_DIR", str(tmp_path / "data"))          # never the real archive
     path = tmp_path / "led.pdf"
     _led_pdf(path)
     app = Path(__file__).resolve().parents[1] / "app.py"
@@ -211,13 +218,54 @@ def test_app_led_module_end_to_end(tmp_path):
     assert not at.exception, [e.value for e in at.exception]
     at.file_uploader[0].set_value([("led.pdf", path.read_bytes(), "application/pdf")]).run()
     assert not at.exception, [e.value for e in at.exception]
-    assert [t.label for t in at.tabs][-6:] == ["סיכום", "שורות", "לפי הזמנה", "קיטים (הכנה)", "מעקב", "הגדרות"]
+    assert [t.label for t in at.tabs][-7:] == ["סיכום", "שורות", "לפי הזמנה", "קיטים (הכנה)", "מחסן", "מעקב", "הגדרות"]
     assert any("תואמים" in s.value for s in at.success)                                # footer check
+    assert any("נשמרו בהיסטוריה" in s.value for s in at.success)                       # saved to the archive
     assert "ניהול פרגולות חכם" in at.title[0].value
     summary = [d.value for d in at.dataframe if "סוג הזמנה" in d.value.columns][0]
     assert set(summary["סוג הזמנה"]) == {"פרגולה מלאה", "תיקון / שירות / תוספת"}        # 6 and 67 apart
     at.segmented_control[0].set_value("סנטפים").run()                                   # back: Santaf unchanged
     assert not at.exception and "Data source" in [r.label for r in at.radio]
+
+
+def test_led_opens_on_the_saved_reports_without_uploading(tmp_path, monkeypatch):
+    """A new session starts on the most recent saved reports and can open earlier ones."""
+    from streamlit.testing.v1 import AppTest
+    monkeypatch.setenv("PERGOLA_DATA_DIR", str(tmp_path / "data"))
+    older, newer = tmp_path / "oct.pdf", tmp_path / "nov.pdf"
+    _led_pdf(older, rows=LED_ROWS[:2])
+    _led_pdf(newer, rows=[("999999", "09/11/2026", 6, "70", 3, 2000, "OK", (0, 0, 0), "")])
+    app = Path(__file__).resolve().parents[1] / "app.py"
+
+    def session():
+        at = AppTest.from_file(str(app), default_timeout=90).run()
+        at.segmented_control[0].set_value("לדים").run()
+        return at
+
+    first = session()
+    first.file_uploader[0].set_value([("oct.pdf", older.read_bytes(), "application/pdf")]).run()
+    assert not first.exception
+    second = session()
+    second.radio[-1].set_value("העלאת דוחות חדשים").run()
+    second.file_uploader[0].set_value([("nov.pdf", newer.read_bytes(), "application/pdf")]).run()
+    assert not second.exception
+
+    fresh = session()                                                # a brand new session, nothing uploaded
+    assert not fresh.exception
+    assert fresh.radio[-1].value == "נתונים שמורים (היסטוריה)"
+    assert [t.label for t in fresh.tabs][-7:][0] == "סיכום"          # opened straight on the data
+    shown = [d.value for d in fresh.dataframe if "הזמנה" in d.value.columns and "קוד" in d.value.columns]
+    orders = set().union(*[set(d["הזמנה"]) for d in shown]) if shown else set()
+    assert "999999" in orders and "839561" not in orders             # only the latest upload by default
+    from led_archive import Archive
+    ids = [e["id"] for e in Archive(tmp_path / "data" / "archive").entries("reports")]
+    picker = fresh.multiselect[0]
+    assert len(picker.options) == 2 and len(ids) == 2                # the earlier month can be added
+    picker.set_value(ids).run()
+    assert not fresh.exception
+    shown = [d.value for d in fresh.dataframe if "הזמנה" in d.value.columns and "קוד" in d.value.columns]
+    orders = set().union(*[set(d["הזמנה"]) for d in shown])
+    assert {"999999", "839561"} <= orders                            # now both months
 
 
 def test_a_broken_led_module_never_breaks_santaf(monkeypatch):

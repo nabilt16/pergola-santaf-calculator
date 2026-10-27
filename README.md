@@ -129,19 +129,36 @@ report are checked against what was read.
 - **Code 6** (full pergola) and **code 67** (repair / service / add-on) are always kept apart: separate
   totals, a type filter, and a type column everywhere. Notes such as "הלדים על הזמנה ראשית 839413" are linked
   to the main order.
-- **Regions:** the reports only carry zone codes (20, 50, 55, 70). The mapping of each code to צפון / מרכז / דרום is
-  set in the *הגדרות* tab (it starts unassigned) and saved to `data/led_settings.json`.
+- **Regions:** zone 20 = חיפה (צפון), 50 = שדרות (דרום), 55 = באר שבע (דרום), 70 = מרכז, 80 = אילת (דרום). They are
+  built in and can be changed in the *הגדרות* tab. Summary and filters show both the region and the city.
+- **Saved history:** every report that is read is saved once in `data/archive/` (by the hash of the file). The
+  LED module opens on the most recent upload without uploading anything, and earlier months can be added from
+  the list of saved reports. `data/` is not part of the git repository. A cloud host's disk is temporary: the
+  *הגדרות* tab has a ZIP backup and restore of the whole history.
+- **Warehouse list (לדים ושנאים במחסן):** an Excel/CSV with an order number and the transformers allocated to it
+  (`1*100W`, `1*100W+1*150W`, `3*150W`). It is read by content, saved to the archive, and **a partial list is
+  expected**: each new list only adds rows to the ones already saved. The *מחסן* tab matches it with the reports
+  by order number and through the "main order" named in the notes of repair orders, shows what is in the list, and
+  marks report lines "במחסן" that the list does not contain as *not verified* (not missing). It compares the
+  recommended allocation with the real one and has a calibration table (how often they are identical for several
+  safety factors and both policies); with only a few shared orders that is an indication, not a verdict.
+- **Order search:** typing an order number in the search box overrides every other filter (date, type, region,
+  stage, status, warehouse state, cancelled), so the order is shown wherever it is; a main order also brings its
+  repair orders. If the order is not in the loaded reports the app says where it is: in the warehouse list (with
+  its allocation) or in a saved report that is not selected.
 - **Status tracking:** the report's own statuses and ticks give the stage (טרם הוזמן, הוזמן, נתקבל, סופק); the
   *מעקב* tab adds manual fields per line (external kit ordered, reference, note), saved to
-  `data/led_tracking.json`, with a JSON backup download/restore (a cloud host's disk is temporary).
+  `data/led_tracking.json`, with a JSON backup download/restore.
 - **Inventory preparation (information only, kits are still ordered externally):** the *קיטים (הכנה)* tab
-  computes what a central stock would need. Specification, all editable in *הגדרות*: COB strips of about
-  180 LEDs per meter drawing **12 W per meter** (a 4 m strip is 48 W net); strips of 1000-4000 mm, a longer
-  length is cut into pieces of at most 4000 mm with none under 1000 mm (6000 = 4000 + 2000, 4200 = 3200 + 1000);
-  a transformer is loaded to at most **80%** of its rating (60 W up to 48 W, so a 4 m strip just fits a 60 W unit
-  such as the ENERLED NR-60-24-CD). All strips of one order and code are summed and bundled on **one central
-  transformer** (for example 4 + 2.5 + 2 + 1 m = 9.5 m = 114 W gets a 250 W unit); only a load above the safe
-  limit of the largest transformer is shared between several. The tab shows the safe load, the strip meters each
-  rating carries, and for every kit the load as a percentage of its safe limit.
-  *To confirm:* the ratings in stock. The defaults are 60, 100, 250 and 500 W (only 60 W and 250 W were named);
-  if, say, a 150 W unit is stocked, 9.5 m would take that instead of 250 W.
+  computes what a central stock would need. COB strips of about 180 LEDs per meter draw **12 W per meter** (a 4 m
+  strip is 48 W net); strips of 1000-4000 mm, a longer length is cut into pieces of at most 4000 mm with none
+  under 1000 mm (6000 = 4000 + 2000, 4200 = 3200 + 1000). Transformers are the sizes found in the warehouse
+  records: **60, 100, 150, 200, 250, 500 W**, each loaded to at most **80%** of its rating (60 W up to 48 W, so a
+  4 m strip just fits a 60 W unit such as the ENERLED NR-60-24-CD). All strips of one order and code are summed and
+  bundled on **one central transformer** (4 + 2.5 + 2 + 1 m = 9.5 m = 114 W gets a 150 W unit); only a load above
+  the safe limit of one stock size is shared between several, written like the warehouse list
+  (`1*60W+1*500W`). A second policy ("least total rating") is available in the settings for comparison with the
+  warehouse. The tab shows the safe load and the strip meters each rating carries, and the load of every kit as a
+  percentage of its safe limit.
+  *Open point:* the allocation actually used by the supplier cannot be derived from one or two orders; the
+  calibration table is there to settle the rule once more of the warehouse list and the earlier months are loaded.

@@ -71,19 +71,32 @@ ON_CLOUD = Path(__file__).resolve().as_posix().startswith("/mount/src")   # Stre
 # Module switch. The LED module is drawn by led_ui and then the script stops, so the Santaf
 # calculator below runs exactly as before when "סנטפים" (the default) is selected. The LED modules
 # are imported only here, so a problem in them can never stop the Santaf calculator from loading.
-MODULE_SANTAF, MODULE_LED = "סנטפים", "לדים"
-module = st.segmented_control("מודול", [MODULE_SANTAF, MODULE_LED], default=MODULE_SANTAF,
+MODULE_SANTAF, MODULE_LED, MODULE_STOCK = "סנטפים", "לדים", "מלאי סנטפים"
+module = st.segmented_control("מודול", [MODULE_SANTAF, MODULE_LED, MODULE_STOCK], default=MODULE_SANTAF,
                               key="module", label_visibility="collapsed")
 if module == MODULE_LED:
     try:
         import led
+        import led_archive
         import led_ingest
         import led_ui
-        for _led_module in (led_ingest, led, led_ui):          # pick up edits on a running server
+        import warehouse
+        for _led_module in (led, led_ingest, warehouse, led_archive, led_ui):   # pick up edits on a running server
             importlib.reload(_led_module)
         led_ui.render(on_cloud=ON_CLOUD)
     except Exception as exc:                                    # st.stop / st.rerun are not Exceptions
         st.error(f"מודול הלדים נכשל בטעינה: {exc}")
+    st.stop()
+if module == MODULE_STOCK:                                      # same isolation as the LED module
+    try:
+        import stock_plan
+        import stock_store
+        import stock_ui
+        for _stock_module in (stock_plan, stock_store, stock_ui):
+            importlib.reload(_stock_module)
+        stock_ui.render(on_cloud=ON_CLOUD)
+    except Exception as exc:
+        st.error(f"מודול המלאי נכשל בטעינה: {exc}")
     st.stop()
 IMAGE_TYPES = ["png", "jpg", "jpeg", "jfif"]
 ENGINE_LOCAL = "Local OCR (Tesseract) - stays on this computer"

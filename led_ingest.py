@@ -82,6 +82,7 @@ class LedLoadReport:
     confirmed: list[str] = field(default_factory=list)      # printed totals match what was read
     unconfirmed: list[str] = field(default_factory=list)
     duplicates: int = 0                                      # lines shared by overlapping files
+    frames: dict = field(default_factory=dict, repr=False)   # file name -> its own lines (for the archive)
 
 
 def _data_row(cells: list[str]):
@@ -258,6 +259,7 @@ def load_led_pdfs(files: list[tuple[str, object]]) -> tuple[pd.DataFrame, LedLoa
             continue
         frames.append(frame)
         report.loaded.append(name)
+        report.frames[name] = frame
         (report.confirmed if frame.attrs.get("footer_matches") else report.unconfirmed).append(name)
     if not frames:
         raise PdfUnreadable("; ".join(f"{n}: {m}" for n, m in report.errors.items())
