@@ -1,6 +1,6 @@
 [server]
 headless = true
-maxUploadSize = 50
+maxUploadSize = 200
 enableStaticServing = true      # serves ./static (web-app manifest and icons) at /app/static/
 
 [browser]

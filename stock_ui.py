@@ -16,7 +16,7 @@ import pdf_ingest
 import stock_plan as sp
 import stock_store
 
-ORDER_TYPES = ["pdf", "xls", "xlsx", "csv"]
+ORDER_TYPES = ["xlsx", "xls", "csv", "pdf", "PDF"]      # Excel first (the default); PDF also in capitals, as phones name it
 LABELS = {
     "date": "תאריך", "order_id": "הזמנה", "need_size": "מידה חסרה", "need_qty": "כמות חסרה", "donor": "מידת תורם",
     "panels_cut": "פנלים לחיתוך", "pieces_per_panel": "חלקים לפנל", "pieces_made": "חלקים שנוצרו",
@@ -46,7 +46,7 @@ def _show(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
 # Data: saved on disk, new uploads are merged in and saved
 # --------------------------------------------------------------------------
 def _read_orders_upload(upload) -> pd.DataFrame:
-    if upload.name.lower().endswith(".pdf"):
+    if upload.name.lower().endswith(".pdf") or upload.getvalue()[:5] == b"%PDF-":      # also a PDF without an extension
         frame, report = pdf_ingest.load_many([(upload.name, upload)])
         if report.errors:
             raise ValueError("; ".join(report.errors.values()))

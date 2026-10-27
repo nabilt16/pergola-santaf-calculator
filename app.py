@@ -105,7 +105,7 @@ ENGINE_VISION = "AI vision (Claude) - most accurate, sends the photo to Anthropi
 SOURCES = ["Excel / CSV file", "PDF report", "Scan / photo of a document"]
 if not ON_CLOUD:                       # a server-side folder is meaningless on the cloud
     SOURCES.append("Local folder")
-source = st.radio("Data source", SOURCES, horizontal=True)
+source = st.radio("Data source", SOURCES, index=SOURCES.index("PDF report"), horizontal=True)
 raw = None          # DataFrame in any accepted header style, fed to calc.process_orders()
 source_name = source_id = None
 
@@ -126,7 +126,7 @@ if source == "Excel / CSV file":
         )
 
 elif source == "PDF report":
-    pdfs = st.file_uploader("Upload digital PDF order reports", type=["pdf"],
+    pdfs = st.file_uploader("Upload digital PDF order reports", type=["pdf", "PDF"],
                             accept_multiple_files=True)
     if pdfs:
         try:

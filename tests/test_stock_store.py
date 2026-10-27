@@ -105,3 +105,35 @@ def test_screen_saves_uploads_and_does_not_ask_again(tmp_path, monkeypatch):
     fresh = _app(tmp_path, monkeypatch)                                     # new session, same disk: nothing to upload
     assert not fresh.info or "העלה קובץ מלאי" not in " ".join(i.value for i in fresh.info)
     assert {m.label: m.value for m in fresh.metric}["משתחררות עם חיתוך"] == "2"
+
+
+# --------------------------------------------------------------------------- defaults and phone uploads
+def test_santaf_defaults_to_pdf_and_stock_module_to_excel(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+    import stock_ui
+    monkeypatch.setenv("PERGOLA_DATA_DIR", str(tmp_path / "data"))
+    app = Path(__file__).resolve().parents[1] / "app.py"
+    at = AppTest.from_file(str(app), default_timeout=90).run()
+    assert not at.exception and at.radio[0].value == "PDF report"
+    assert [u.label for u in at.file_uploader] == ["Upload digital PDF order reports"]
+    assert stock_ui.ORDER_TYPES[0] == "xlsx" and "PDF" in stock_ui.ORDER_TYPES        # Excel first, PDF in capitals too
+    config = (Path(__file__).resolve().parents[1] / ".streamlit" / "config.toml").read_text(encoding="utf-8")
+    assert "maxUploadSize = 200" in config
+
+
+def test_a_pdf_from_a_phone_is_recognised_by_content(monkeypatch):
+    import stock_ui
+
+    class Upload:                                           # a phone may send "report" or "REPORT.PDF"
+        def __init__(self, name, data):
+            self.name, self._data = name, data
+
+        def getvalue(self):
+            return self._data
+
+    called = []
+    monkeypatch.setattr(stock_ui.pdf_ingest, "load_many",
+                        lambda files: (called.append(files[0][0]) or pd.DataFrame(), type("R", (), {"errors": {}})()))
+    for name in ("report", "REPORT.PDF"):
+        stock_ui._read_orders_upload(Upload(name, b"%PDF-1.7 ..."))
+    assert called == ["report", "REPORT.PDF"]

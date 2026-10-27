@@ -105,7 +105,7 @@ def _saved_reports(archive: led_archive.Archive) -> pd.DataFrame | None:
 def _pick_files(folder_mode: bool) -> tuple:
     """The PDFs to read, as ((name, bytes), ...)."""
     if not folder_mode:
-        uploaded = st.file_uploader("דוחות לדים (PDF דיגיטלי)", type=["pdf"],
+        uploaded = st.file_uploader("דוחות לדים (PDF דיגיטלי)", type=["pdf", "PDF"],
                                     accept_multiple_files=True, key="led_upload")
         return tuple((f.name, f.getvalue()) for f in uploaded or [])
     folder = Path(st.text_input("נתיב התיקייה", str(DEFAULT_FOLDER), key="led_folder"))
