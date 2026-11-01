@@ -377,9 +377,10 @@ class TrackingStore:
 
     def load(self) -> dict:
         try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
+            records = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
+        return records if isinstance(records, dict) else {}
 
     def save(self, records: dict) -> bool:
         """True when written; False when the disk is read-only (some hosts), nothing is lost."""
@@ -396,7 +397,8 @@ class TrackingStore:
         out = lines.copy()
         out["line_key"] = pd.Series(line_keys(out), index=out.index, dtype=object)
         for name, default in TRACK_FIELDS.items():
-            values = [records.get(k, {}).get(name, default) for k in out["line_key"]]
+            values = [(records.get(k) if isinstance(records.get(k), dict) else {}).get(name, default)
+                      for k in out["line_key"]]
             missing = [v is None or v != v for v in values]                 # None / NaN in a saved file
             if isinstance(default, bool):
                 # st.data_editor only accepts a checkbox column that is really boolean, even when it is empty
@@ -434,6 +436,15 @@ def load_settings(path: Path = DATA_DIR / "led_settings.json") -> LedSettings:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return LedSettings()
+    try:
+        return _settings_from(raw)
+    except (AttributeError, TypeError, ValueError):            # a damaged settings file: use the defaults
+        return LedSettings()
+
+
+def _settings_from(raw: dict) -> LedSettings:
+    if not isinstance(raw, dict):
+        raise ValueError("settings are not an object")
     if raw.get("version", 1) < SETTINGS_VERSION:
         # saved before the transformer sizes and the zone mapping were fixed by specification: those
         # three would override the specification with old values, so they are taken from the defaults

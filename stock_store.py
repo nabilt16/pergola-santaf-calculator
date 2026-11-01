@@ -96,11 +96,15 @@ class StockStore:
 
     def load_stock(self) -> tuple[sp.Stock, dict] | None:
         raw = self._read_json("stock.json", None)
-        if not raw or not raw.get("quantities"):
+        try:                                                  # a damaged file counts as "no saved stock"
+            if not raw or not raw.get("quantities"):
+                return None
+            stock = sp.Stock({int(k): int(v) for k, v in raw["quantities"].items()},
+                             pd.Timestamp(raw["as_of"]) if raw.get("as_of") else None,
+                             [int(z) for z in raw.get("zero_added", [])])
+            return stock, {"source": str(raw.get("source", "")), "saved_at": str(raw.get("saved_at", ""))}
+        except (AttributeError, TypeError, ValueError, KeyError):
             return None
-        stock = sp.Stock({int(k): int(v) for k, v in raw["quantities"].items()},
-                         pd.Timestamp(raw["as_of"]) if raw.get("as_of") else None, list(raw.get("zero_added", [])))
-        return stock, {"source": raw.get("source", ""), "saved_at": raw.get("saved_at", "")}
 
     # ---- orders
     def save_orders(self, frame: pd.DataFrame, file_name: str) -> int:
@@ -132,16 +136,26 @@ class StockStore:
             frame = pd.read_csv(self.root / "orders.csv", dtype=str, keep_default_na=False, encoding="utf-8-sig")
         except (OSError, ValueError):
             return None
-        return frame if len(frame) else None
+        return frame if len(frame) and "order_id" in frame.columns else None
 
     def orders_files(self) -> list[dict]:
-        return self._read_json("orders_files.json", [])
+        files = self._read_json("orders_files.json", [])
+        return [f for f in files if isinstance(f, dict)] if isinstance(files, list) else []
 
     # ---- orders that already received panels (daily update)
     def issued(self) -> dict[str, dict]:
         """{order_id: {"issued_on": "YYYY-MM-DD", "note": str}}: orders that got their panels from the stock."""
         raw = self._read_json("issued.json", {})
-        return raw if isinstance(raw, dict) else {}
+        if not isinstance(raw, dict):
+            return {}
+        clean = {}
+        for oid, item in raw.items():
+            try:
+                clean[str(oid)] = {"issued_on": pd.Timestamp(item["issued_on"]).strftime("%Y-%m-%d"),
+                                   "note": str(item.get("note", ""))}
+            except (TypeError, ValueError, KeyError, AttributeError):
+                continue                                      # a damaged entry is dropped, the rest still apply
+        return clean
 
     def mark_issued(self, order_ids, issued_on, note: str = "") -> int:
         current, day = self.issued(), pd.Timestamp(issued_on).strftime("%Y-%m-%d")
@@ -161,11 +175,22 @@ class StockStore:
     # ---- settings and the last run
     def load_settings(self) -> dict:
         saved = self._read_json("settings.json", {})
+        saved = saved if isinstance(saved, dict) else {}
         merged = {**DEFAULT_SETTINGS, **{k: v for k, v in saved.items() if k in DEFAULT_SETTINGS}}
         try:
             pd.Timestamp(merged["start"]), pd.Timestamp(merged["end"])
         except (ValueError, TypeError):
             merged["start"], merged["end"] = DEFAULT_SETTINGS["start"], DEFAULT_SETTINGS["end"]
+        for key in ("kerf_mm", "buffer_days"):                # numbers must be numbers
+            try:
+                merged[key] = max(0, int(merged[key]))
+            except (TypeError, ValueError):
+                merged[key] = DEFAULT_SETTINGS[key]
+        merged["skip_stuck"] = bool(merged["skip_stuck"])
+        try:
+            merged["zero_sizes"] = [int(z) for z in merged["zero_sizes"]]
+        except (TypeError, ValueError):
+            merged["zero_sizes"] = list(DEFAULT_SETTINGS["zero_sizes"])
         return merged
 
     def save_settings(self, settings: dict) -> None:

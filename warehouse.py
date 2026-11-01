@@ -244,7 +244,15 @@ class ArrivalStore:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
-        return {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+        if not isinstance(raw, dict):
+            return {}
+        clean = {}
+        for k, v in raw.items():
+            try:
+                clean[str(k)] = pd.Timestamp(v).strftime("%Y-%m-%d")
+            except (TypeError, ValueError):
+                continue                                     # a damaged entry is dropped, the rest still apply
+        return clean
 
     def _write(self, data: dict) -> bool:
         try:

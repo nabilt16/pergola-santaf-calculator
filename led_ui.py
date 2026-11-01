@@ -26,6 +26,8 @@ import led_ingest
 import warehouse
 from uploads import upload_types
 from pdf_ingest import PdfUnreadable
+from safety import attempt, guard, show_failure
+from safety import strict as safety_strict
 
 DEFAULT_FOLDER = Path.home() / "Downloads" / "פרגולות"
 DEFAULT_WAREHOUSE_FILE = Path.home() / "Downloads" / "לדים ושנאים במחסן.xlsx"
@@ -685,14 +687,21 @@ def render(on_cloud: bool = False) -> None:
     _autoload(archive, on_cloud)
     if st.session_state.get("_led_autoload_msg"):
         st.caption("טעינה אוטומטית: " + st.session_state["_led_autoload_msg"])
-    raw = _load_reports(archive, on_cloud)
+    raw = attempt("הדוחות לא נטענו", lambda: _load_reports(archive, on_cloud))
     if raw is None:
         return
 
-    settings = _settings()
-    wh = _warehouse_list(archive)
+    settings = attempt("ההגדרות לא נקראו, משתמש בברירות המחדל", _settings, led.LedSettings())
+    wh = attempt("רשימת המחסן לא נטענה", lambda: _warehouse_list(archive))
     arrivals_store = warehouse.ArrivalStore()
-    lines = warehouse.annotate_lines(led.prepare(raw, settings), wh, manual=arrivals_store.arrived())
+    manual = attempt("סימוני ההגעה לא נקראו", arrivals_store.arrived, {})
+    try:
+        lines = warehouse.annotate_lines(led.prepare(raw, settings), wh, manual=manual)
+    except Exception as exc:                                    # the reports are readable but do not fit the model
+        if safety_strict():
+            raise
+        show_failure("הדוחות נקראו אך לא עובדו", exc)
+        return
     lines["warehouse_label"] = lines["warehouse_state"].replace("", NOT_LISTED)
     view = _filters(lines)
     searched = str(st.session_state.get("led_search", "")).strip()
@@ -701,23 +710,23 @@ def render(on_cloud: bool = False) -> None:
     elif view.empty:
         st.warning("אין שורות שמתאימות לסינון.")
     tabs = st.tabs(["סיכום", "שורות", "לפי הזמנה", "קיטים (הכנה)", "מחסן", "הגעה לשחרור", "מעקב", "הגדרות"])
-    with tabs[0]:
+    with tabs[0], guard("הסיכום"):
         if not view.empty:
             _summary(view)
-    with tabs[1]:
+    with tabs[1], guard("טבלת השורות"):
         if not view.empty:
             _lines_tab(view)
-    with tabs[2]:
+    with tabs[2], guard("לפי הזמנה"):
         if not view.empty:
             _orders_tab(view)
-    with tabs[3]:
+    with tabs[3], guard("הכנת הקיטים"):
         if not view.empty:
             _kits_tab(view, settings)
-    with tabs[4]:
+    with tabs[4], guard("המחסן"):
         _warehouse_tab(lines, wh, settings, archive, on_cloud)
-    with tabs[5]:
+    with tabs[5], guard("הגעה לשחרור"):
         _arrival_tab(lines, archive, arrivals_store)
-    with tabs[6]:
+    with tabs[6], guard("המעקב"):
         _tracking_tab(view if not view.empty else lines.iloc[0:0])
-    with tabs[7]:
+    with tabs[7], guard("ההגדרות"):
         _settings_tab(lines, settings, archive)

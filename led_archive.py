@@ -55,7 +55,13 @@ class Archive:
             raw = json.loads(self._index_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             raw = {}
-        return {kind: list(raw.get(kind, [])) for kind in KINDS}
+        raw = raw if isinstance(raw, dict) else {}
+        needed = ("id", "name", "saved_at", "sha256", "batch")
+
+        def usable(kind):                                     # a damaged entry is skipped, the others stay
+            items = raw.get(kind, [])
+            return [e for e in items if isinstance(e, dict) and all(k in e for k in needed)]                 if isinstance(items, list) else []
+        return {kind: usable(kind) for kind in KINDS}
 
     def _write_index(self, index: dict) -> None:
         try:

@@ -16,6 +16,7 @@ import pdf_ingest
 import stock_autoload
 import stock_plan as sp
 import stock_store
+from safety import guard, show_failure, strict
 from uploads import upload_types
 
 ORDER_TYPES = ["xlsx", "xls", "csv", "pdf"]            # Excel first (the default); the uploader adds the MIME types
@@ -295,14 +296,31 @@ store = stock_store.StockStore()
 
 
 def render(on_cloud: bool = False) -> None:
-    """Draw the stock module."""
+    """Draw the stock module. Each part is guarded: a damaged file or a failure in one part shows a message and
+    the rest of the module (and the app) keeps working."""
     global store
     store = stock_store.StockStore()                       # re-read PERGOLA_DATA_DIR on every run
     st.subheader("תכנון מלאי סנטפים וחיתוך חכם")
-    settings = _settings_row(store)
+    try:
+        settings = _settings_row(store)
+    except Exception as exc:
+        if strict():
+            raise
+        show_failure("ההגדרות לא נקראו, משתמש בברירות המחדל", exc)
+        settings = dict(stock_store.DEFAULT_SETTINGS)
     _autoload(store, settings, on_cloud)
-    _data_section(store, settings, on_cloud)
+    with guard("אזור הנתונים השמורים"):
+        _data_section(store, settings, on_cloud)
+    with guard("חישוב תוכנית המלאי"):
+        _plan(store, settings, on_cloud)
+
+
+def _plan(store: stock_store.StockStore, settings: dict, on_cloud: bool) -> None:
     saved_stock, raw = store.load_stock(), store.load_orders()
+    if saved_stock is None and (store.root / "stock.json").exists():
+        st.error("קובץ המלאי השמור פגום או ריק. העלה קובץ מלאי מחדש (אקסל) והוא יוחלף.")
+    elif raw is None and (store.root / "orders.csv").exists():
+        st.error("קובץ ההזמנות השמור פגום או ריק. העלה דוחות הזמנות מחדש והם יישמרו מחדש.")
     if saved_stock is None or raw is None:
         st.info("העלה קובץ מלאי ודוחות הזמנות. הם יישמרו ולא יידרשו שוב.")
         return
@@ -315,7 +333,7 @@ def render(on_cloud: bool = False) -> None:
     try:
         panels = calc.process_orders(raw)
         everything = sp.order_demand(panels)
-    except ValueError as exc:
+    except Exception as exc:                               # missing columns, unreadable dates, ...
         st.error(f"הנתונים השמורים לא עובדו: {exc}")
         return
     # orders that already got their panels (daily update) leave the queue; those issued after the stock date
@@ -338,7 +356,7 @@ def render(on_cloud: bool = False) -> None:
         store.save_run({"computed_at": datetime.now().isoformat(timespec="seconds"), "from": settings["start"],
                         "to": settings["end"], "orders": int(len(res)), "released": f1.released_total,
                         "stuck": f1.stuck_total, "cuts": int(len(cuts)), "checks_ok": not problems}, cuts)
-    except stock_store.StoreError:
+    except Exception:                                      # the saved copy of the run is a convenience only
         pass
     st.caption(f"מלאי נכון ל-{_dmy(stock.as_of)} · הזמנות מ-{_dmy(settings['start'])} עד {_dmy(settings['end'])} "
                f"(הזמנות קודמות כבר יצאו ולא נספרות)")
@@ -347,13 +365,13 @@ def render(on_cloud: bool = False) -> None:
         st.caption(f"עדכון יומי: {len(effect.table)} הזמנות כבר קיבלו סנטפים והוסרו מהתור; "
                    f"{deducted} פנלים נוכו מהמלאי (הזמנות שהונפקו אחרי תאריך המלאי).")
     tabs = st.tabs(["תוכנית חיתוך חכמה", "עדכון יומי", "הזמנות", "מידות ורכש", "גיבוי"])
-    with tabs[0]:
+    with tabs[0], guard("תוכנית החיתוך"):
         _cut_tab(res, cuts, base, orders, stock_now, problems)
-    with tabs[1]:
+    with tabs[1], guard("העדכון היומי"):
         _daily_tab(store, everything, orders, stock, effect)
-    with tabs[2]:
+    with tabs[2], guard("רשימת ההזמנות"):
         _orders_tab(res)
-    with tabs[3]:
+    with tabs[3], guard("מידות ורכש"):
         _sizes_tab(sizes, plan)
-    with tabs[4]:
+    with tabs[4], guard("הגיבוי"):
         _backup_section(store, on_cloud)
