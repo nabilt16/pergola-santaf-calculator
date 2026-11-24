@@ -199,8 +199,16 @@ def parse_dates(series: pd.Series) -> pd.Series:
         return pd.to_datetime(series, dayfirst=True)
 
 
-def process_orders(df: pd.DataFrame) -> pd.DataFrame:
+REJECTED_COLUMNS = ["order_id", "confirmation_date", "original_quantity", "original_length", "rounded_length",
+                    "reason", "source_row"]
+
+
+def process_orders(df: pd.DataFrame, rejected: list | None = None) -> pd.DataFrame:
     """Apply rounding and split rules.
+
+    A row whose length cannot be covered (e.g. 21000 mm) raises ValueError, as always. When a list is passed as
+    `rejected` the row is left out of the result and described in that list instead (see rejected_frame), so one
+    impossible row does not fail the whole report. The length is never "corrected" automatically.
 
     Returns one row per Santaf panel part with columns: the original fields,
     rounded_quantity, rounded_length, part (1-based), panel_length, quantity,
@@ -215,7 +223,14 @@ def process_orders(df: pd.DataFrame) -> pd.DataFrame:
     for source_row, rec in enumerate(df.to_dict("records")):
         qty = round_quantity(rec["original_quantity"])
         length = round_length(rec["original_length"])
-        for part, panel in enumerate(split_length(length), start=1):
+        try:
+            parts = split_length(length)
+        except ValueError as exc:
+            if rejected is None:
+                raise
+            rejected.append({**rec, "rounded_length": length, "reason": str(exc), "source_row": source_row})
+            continue
+        for part, panel in enumerate(parts, start=1):
             rows.append(
                 {
                     **rec,
@@ -235,6 +250,11 @@ def process_orders(df: pd.DataFrame) -> pd.DataFrame:
     out["quarter"] = d.dt.quarter
     out["week"] = d.map(week_of_month)
     return out
+
+
+def rejected_frame(rejected: list) -> pd.DataFrame:
+    """The rows process_orders left out, one per row, for showing to the user."""
+    return pd.DataFrame(rejected, columns=REJECTED_COLUMNS)
 
 
 # --------------------------------------------------------------------------

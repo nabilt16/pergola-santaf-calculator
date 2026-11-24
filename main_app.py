@@ -256,9 +256,22 @@ if raw is None:
     st.stop()
 
 try:
-    panels = calc.process_orders(raw)
+    skipped = []
+    panels = calc.process_orders(raw, rejected=skipped)
 except Exception as exc:  # surface input problems to the user
     st.error(f"Could not process '{source_name}': {exc}")
+    st.stop()
+
+if skipped:
+    bad = calc.rejected_frame(skipped)
+    st.warning(
+        f"{len(bad)} row(s) were left out because their length cannot be made from two panels of at most "
+        f"{calc.MAX_PANEL_LENGTH} mm. Check them in the source report (a typing mistake is likely) - nothing was "
+        "corrected automatically, and these rows are not counted below.")
+    st.dataframe(bad[["order_id", "confirmation_date", "original_quantity", "original_length", "rounded_length"]],
+                 hide_index=True, width="stretch")
+if panels.empty:
+    st.error("No usable rows are left after leaving out the rows above.")
     st.stop()
 
 first, last = panels["confirmation_date"].min(), panels["confirmation_date"].max()

@@ -331,10 +331,22 @@ def _plan(store: stock_store.StockStore, settings: dict, on_cloud: bool) -> None
             stock.zero_added = [*stock.zero_added, size]
     stock.quantities = dict(sorted(stock.quantities.items()))
     try:
-        panels = calc.process_orders(raw)
+        skipped = []
+        panels = calc.process_orders(raw, rejected=skipped)
         everything = sp.order_demand(panels)
     except Exception as exc:                               # missing columns, unreadable dates, ...
         st.error(f"הנתונים השמורים לא עובדו: {exc}")
+        return
+    if skipped:
+        bad = calc.rejected_frame(skipped)
+        st.warning(f"{len(bad)} שורות הושמטו כי האורך שלהן לא ניתן ליצירה משני פנלים של עד {calc.MAX_PANEL_LENGTH} מ״מ "
+                   "(כנראה טעות הקלדה בדוח). לא בוצע תיקון אוטומטי והן לא נספרות בתוכנית.")
+        st.dataframe(bad[["order_id", "confirmation_date", "original_quantity", "original_length", "rounded_length"]]
+                     .rename(columns={"order_id": "הזמנה", "confirmation_date": "תאריך", "original_quantity": "כמות",
+                                      "original_length": "אורך מקורי", "rounded_length": "אורך מעוגל"}),
+                     hide_index=True, width="stretch")
+    if panels.empty:
+        st.error("לא נשארו שורות שניתן לעבד אחרי השמטת השורות החריגות.")
         return
     # orders that already got their panels (daily update) leave the queue; those issued after the stock date
     # also take their material out of the stock

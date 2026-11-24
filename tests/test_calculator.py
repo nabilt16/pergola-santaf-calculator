@@ -700,3 +700,18 @@ def test_app_renders_the_pwa_helper_without_errors():
     app = Path(__file__).resolve().parents[1] / "app.py"
     at = AppTest.from_file(str(app), default_timeout=60).run()
     assert not at.exception
+
+
+def test_an_impossible_length_is_left_out_not_fatal():
+    """One row like 21000 mm (almost surely a typo for 2100) must not fail the whole report, and is not corrected."""
+    raw = pd.DataFrame({"order_id": ["844167", "100001"], "confirmation_date": ["2026-12-07", "2026-12-08"],
+                        "original_quantity": [3.7, 2], "original_length": [21000, 2100]})
+    with pytest.raises(ValueError, match="cannot be covered"):
+        calc.process_orders(raw)                                      # the default is unchanged
+    skipped = []
+    panels = calc.process_orders(raw, rejected=skipped)
+    assert set(panels["order_id"]) == {"100001"} and panels["panel_length"].tolist() == [2500]
+    bad = calc.rejected_frame(skipped)
+    assert bad["order_id"].tolist() == ["844167"] and bad["original_length"].tolist() == [21000]
+    assert bad["rounded_length"].tolist() == [21000] and "cannot be covered" in bad["reason"].iloc[0]
+    assert calc.rejected_frame([]).empty
