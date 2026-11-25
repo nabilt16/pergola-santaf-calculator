@@ -18,6 +18,7 @@ import ocr_ingest as ocr
 import pdf_ingest
 import pwa
 import report_loader
+import upload_diag
 from safety import show_failure, strict
 from uploads import upload_types
 import vision_ingest as vision
@@ -83,6 +84,7 @@ ON_CLOUD = Path(__file__).resolve().as_posix().startswith("/mount/src")   # Stre
 # calculator below runs exactly as before when "סנטפים" (the default) is selected. The LED modules
 # are imported only here, so a problem in them can never stop the Santaf calculator from loading.
 MODULE_SANTAF, MODULE_LED, MODULE_STOCK = "סנטפים", "לדים", "מלאי סנטפים"
+upload_diag.monitor()           # passive recording of what the phone sees during an upload (nothing is sent anywhere)
 module = st.segmented_control("מודול", [MODULE_SANTAF, MODULE_LED, MODULE_STOCK], default=MODULE_SANTAF,
                               key="module", label_visibility="collapsed")
 if module == MODULE_LED:
@@ -98,6 +100,7 @@ if module == MODULE_LED:
         led_ui.render(on_cloud=ON_CLOUD)
     except Exception as exc:                                    # st.stop / st.rerun are not Exceptions
         show_failure("מודול הלדים נכשל בטעינה", exc)
+    upload_diag.footer()
     st.stop()
 if module == MODULE_STOCK:                                      # same isolation as the LED module
     try:
@@ -110,6 +113,7 @@ if module == MODULE_STOCK:                                      # same isolation
         stock_ui.render(on_cloud=ON_CLOUD)
     except Exception as exc:
         show_failure("מודול המלאי נכשל בטעינה", exc)
+    upload_diag.footer()
     st.stop()
 IMAGE_TYPES = ["png", "jpg", "jpeg", "jfif"]
 ENGINE_LOCAL = "Local OCR (Tesseract) - stays on this computer"
@@ -141,13 +145,17 @@ if source == "Excel / CSV file":
 elif source == "PDF report":
     pdfs = st.file_uploader("Upload digital PDF order reports", type=upload_types("pdf"),
                             accept_multiple_files=True)
+    upload_diag.mark_files(pdfs)
     try:
         loaded = report_loader.get("santaf_report", pdfs)
     except pdf_ingest.PdfUnreadable as exc:
         st.error(f"הקובץ לא נקלט: {exc}")
+        upload_diag.footer()
         st.stop()
     except Exception as exc:                      # an unexpected failure while reading: a message, never a white screen
         st.error(f"הקובץ לא נקלט בגלל תקלה לא צפויה: {exc}")
+        upload_diag.mark("unexpected failure", type(exc).__name__)
+        upload_diag.footer()
         st.stop()
     if loaded is not None:
         report_loader.show(loaded, "santaf_report")
@@ -155,6 +163,7 @@ elif source == "PDF report":
     else:
         st.info("Upload a digital PDF report (text can be selected in it). Scanned PDFs have no "
                 "text layer - use the scan option for those.")
+    upload_diag.footer()
 
 elif source == "Local folder":
     folder = st.text_input("Folder path", placeholder="D:/orders")

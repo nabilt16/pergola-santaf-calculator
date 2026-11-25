@@ -27,6 +27,7 @@ import pandas as pd
 import streamlit as st
 
 import pdf_ingest
+import upload_diag
 
 
 
@@ -207,16 +208,20 @@ def get(state_key: str, uploaded) -> LoadedReport | None:
         if kept is not None and kept.signature == sig:
             kept.origin = "upload"                        # a rerun, or the same file after a restore: nothing to read again
             return kept
+        upload_diag.mark("reading")
         with st.status("קורא את הדוח...", expanded=False) as status:
             try:
                 loaded = load(files)
             except pdf_ingest.PdfUnreadable as exc:
                 status.update(label="הקריאה נכשלה", state="error")
+                upload_diag.mark("read failed", type(exc).__name__)
                 raise
+            upload_diag.mark("rows extracted", str(len(loaded.raw_all)))
             status.update(label=f"הדוח נקרא: {len(loaded.raw_all)} שורות", state="complete")
         loaded.origin = "upload"
         st.session_state[state_key] = loaded                # replaces the previous report
         save_to_disk(state_key, loaded)
+        upload_diag.mark("checked against printed totals", "ok" if not any("מדפיס" in p for p in check(loaded)) else "MISMATCH")
         return loaded
     if kept is not None:
         kept.origin = "session"
@@ -238,6 +243,7 @@ def show(loaded: LoadedReport, state_key: str) -> None:
         st.warning(f"{report.duplicates} שורות מופיעות ביותר מדוח אחד (הדוחות חופפים) ונספרות פעם אחת.  \n"
                    f"({report.duplicates} row(s) appear in more than one of the files and are counted once.)")
     problems = check(loaded)
+    upload_diag.mark("shown", loaded.origin)
     if loaded.origin != "upload":
         where = "מהסשן הנוכחי" if loaded.origin == "session" else "שנשמר בדיסק מהפעם הקודמת"
         st.info(f"מוצג הדוח האחרון שנקלט ({', '.join(report.loaded)}), {where}. כדי להחליף אותו, העלה קובץ חדש.")
