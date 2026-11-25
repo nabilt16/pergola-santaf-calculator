@@ -6,6 +6,7 @@ Santaf screens are never touched. The stock file, the order reports and the sett
 """
 from __future__ import annotations
 
+import io
 from datetime import date, datetime
 
 import pandas as pd
@@ -13,6 +14,7 @@ import streamlit as st
 
 import calculator as calc
 import pdf_ingest
+import report_loader
 import stock_autoload
 import stock_plan as sp
 import stock_store
@@ -49,10 +51,14 @@ def _show(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
 # Data: saved on disk, new uploads are merged in and saved
 # --------------------------------------------------------------------------
 def _read_orders_upload(upload) -> pd.DataFrame:
-    if upload.name.lower().endswith(".pdf") or upload.getvalue()[:5] == b"%PDF-":      # also a PDF without an extension
-        frame, report = pdf_ingest.load_many([(upload.name, upload)])
-        if report.errors:
-            raise ValueError("; ".join(report.errors.values()))
+    data = bytes(upload.getvalue())                     # the bytes, not the file object: no read position to trip over
+    if not data:
+        raise ValueError(report_loader.explain(upload.name, data))
+    if upload.name.lower().endswith(".pdf") or data[:5] == b"%PDF-":      # also a PDF without an extension
+        try:
+            frame, _ = pdf_ingest.load_many([(upload.name, io.BytesIO(data))])
+        except pdf_ingest.PdfUnreadable as exc:
+            raise ValueError(report_loader.explain(upload.name, data, exc)) from exc
         return frame
     return calc.load_orders(upload)
 
@@ -74,6 +80,7 @@ def _autoload(store: stock_store.StockStore, settings: dict, on_cloud: bool, for
 
 def _data_section(store: stock_store.StockStore, settings: dict, on_cloud: bool = False) -> None:
     saved_stock, saved_orders = store.load_stock(), store.load_orders()
+    outcome = st.container()                            # upload results show here, even when the box below folds
     with st.expander("נתונים שמורים והעלאה", expanded=saved_stock is None or saved_orders is None):
         st.caption("הקבצים נשמרים בדיסק ונטענים אוטומטית בכל פתיחה. העלאה חדשה מתווספת לשמור (בלי כפילויות).")
         if not on_cloud:
@@ -92,19 +99,23 @@ def _data_section(store: stock_store.StockStore, settings: dict, on_cloud: bool 
                 loaded = sp.load_stock(stock_file, add_zero_sizes=tuple(settings["zero_sizes"]))
                 store.save_stock(loaded, stock_file.name)
                 st.session_state["_stock_seen"] = signature
-                st.success(f"המלאי נשמר ({stock_file.name}, נכון ל-{_dmy(loaded.as_of)})")
+                outcome.success(f"המלאי נשמר ({stock_file.name}, נכון ל-{_dmy(loaded.as_of)})")
             except (ValueError, stock_store.StoreError) as exc:
-                st.error(f"קובץ המלאי לא נקרא: {exc}")
+                outcome.error(f"קובץ המלאי לא נקרא: {exc}")
         for upload in order_files or []:
             key = (upload.name, upload.size)
             if key in st.session_state.setdefault("_orders_seen", []):
                 continue
             try:
-                added = store.save_orders(_read_orders_upload(upload), upload.name)
+                with st.status(f"קורא את {upload.name}...", expanded=False) as status:
+                    frame = _read_orders_upload(upload)
+                    added = store.save_orders(frame, upload.name)
+                    status.update(label=f"{upload.name}: נקרא", state="complete")
                 st.session_state["_orders_seen"].append(key)
-                st.success(f"{upload.name}: נשמרו {added} שורות חדשות")
+                outcome.success(f"הקובץ {upload.name} נקלט בהצלחה: {len(frame)} שורות, מהן {added} חדשות"
+                                + (" (הקובץ כבר היה שמור, לא נספר פעמיים)" if added == 0 else ""))
             except Exception as exc:              # a bad file must not stop the module
-                st.error(f"{upload.name} לא נקרא: {exc}")
+                outcome.error(f"הקובץ {upload.name} לא נקלט: {exc}")
         saved_stock, saved_orders = store.load_stock(), store.load_orders()
         if saved_stock:
             stock, info = saved_stock

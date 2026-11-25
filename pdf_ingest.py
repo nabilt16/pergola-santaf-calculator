@@ -24,6 +24,27 @@ class PdfUnreadable(RuntimeError):
 
 
 _CID = re.compile(r"\(cid:\d+\)")
+_CID_ONE = re.compile(r"\(cid:(\d+)\)")
+_HEBREW = "אבגדהוזחטיךכלםמןנסעףפץצקרשת"      # glyph ids 672..698 of the report's font, in alphabet order
+
+
+def decode_cid(text) -> str:
+    """Readable Hebrew from a cell stored as glyph ids ("(cid:684)(cid:690)..."), e.g. the item status.
+
+    The report's font has no Unicode map, but its Hebrew glyphs are consecutive (672 = alef ... 698 = tav) and
+    the text is stored in visual order, so the decoded string is reversed. Unknown glyphs become "?".
+    """
+    if text is None:
+        return ""
+    out, pos = [], 0
+    for m in _CID_ONE.finditer(str(text)):
+        out.append(str(text)[pos:m.start()])
+        n = int(m.group(1))
+        out.append(" " if n == 3 else _HEBREW[n - 672] if 672 <= n <= 698 else "?")
+        pos = m.end()
+    out.append(str(text)[pos:])
+    plain = "".join(out)
+    return plain[::-1].strip() if _CID_ONE.search(str(text)) else plain.strip()
 _MIN_SHARE = 0.5          # a column is "dates" / "ids" / "numbers" when this share of cells fit
 
 
@@ -36,11 +57,16 @@ def _share(values: list[str], test) -> float:
     return sum(1 for v in filled if test(v)) / len(filled) if filled else 0.0
 
 
-def table_rows(table: list[list]) -> list[dict]:
-    """Extract order rows from one pdfplumber table (list of cell rows), by column content."""
+def table_rows(table: list[list], page_no: int = 0) -> list[dict]:
+    """Extract order rows from one pdfplumber table (list of cell rows), by column content.
+
+    Besides the canonical fields each row carries `status` (the readable item status), `page` and `line` (the
+    row's place in the report); DataFrames built with columns=COLUMNS simply ignore them.
+    """
+    raw_grid = [[("" if c is None else str(c)) for c in row] for row in table if row]
     grid = [[_cell(c) for c in row] for row in table if row]
     width = max((len(r) for r in grid), default=0)
-    if width < 4 or len(grid) < 2:
+    if width < 4 or not grid:        # one row is enough: the report prints some rows as tables of their own
         return []
     cols = [[r[i] if i < len(r) else "" for r in grid] for i in range(width)]
 
@@ -64,19 +90,27 @@ def table_rows(table: list[list]) -> list[dict]:
     mapping = dict(zip(fields, numeric))
     mapping["confirmation_date"], mapping["order_id"] = date_i, id_i
 
+    # the status is the leftover column holding text (glyph ids in these reports, plain text in others)
+    used = set(mapping.values())
+    filled = {i: sum(1 for r in raw_grid if i < len(r) and r[i].strip()) for i in range(width) if i not in used}
+    status_i = max(filled, key=lambda i: (filled[i], -i)) if filled and max(filled.values()) else None
+
     rows = []
-    for r in grid:
+    for line, r in enumerate(grid, start=1):
         def get(field):
             i = mapping.get(field)
             return r[i] if i is not None and i < len(r) else ""
         date, order_id = parse_date(get("confirmation_date")), parse_id(get("order_id"))
         if not date or not order_id:                      # header / total / blank rows
             continue
+        raw = raw_grid[line - 1]
         rows.append({
             "order_id": order_id, "confirmation_date": date,
             "code": get("code"), "zone": get("zone"),
             "original_quantity": parse_number(get("original_quantity")),
             "original_length": parse_number(get("original_length")),
+            "status": decode_cid(raw[status_i]) if status_i is not None and status_i < len(raw) else "",
+            "page": page_no, "line": line,
         })
     return rows
 
@@ -97,8 +131,31 @@ def _words_rows(page) -> list[dict]:
     return df[COLUMNS].to_dict("records") if not df.empty else []
 
 
-def load_pdf(source) -> pd.DataFrame:
-    """Read every order row from a digital PDF (path or file-like object)."""
+DETAIL_COLUMNS = ["status", "page", "line", "item_number"]
+_SKU = re.compile(r"BH\s*(\d{4})")
+_PRINTED = re.compile(r"(\d+(?:\.\d+)?)\s+(\d+)\s*:")
+
+
+def printed_totals(page_texts: list[str]) -> tuple[int, float] | None:
+    """(rows, quantity) from the totals line the report prints at its end ("664.73 169 :..."), if it is there."""
+    found = [m for text in page_texts for m in _PRINTED.finditer(_CID.sub("", text))]
+    return (int(found[-1].group(2)), float(found[-1].group(1))) if found else None
+
+
+def report_sku(page_texts: list[str]) -> str:
+    """The item number printed in the product heading ("... BH ... 3700"), or ''."""
+    for text in page_texts:
+        match = _SKU.search(_CID.sub("", text))
+        if match:
+            return match.group(1)
+    return ""
+
+
+def load_pdf(source, details: bool = False) -> pd.DataFrame:
+    """Read every order row from a digital PDF (path or file-like object).
+
+    With `details` the frame also has the item status and the page / line of each row in the report.
+    """
     try:
         import pdfplumber
     except ImportError as exc:
@@ -109,11 +166,14 @@ def load_pdf(source) -> pd.DataFrame:
     has_text = False
     try:
         with pdfplumber.open(source) as pdf:
-            for page in pdf.pages:
+            for page_no, page in enumerate(pdf.pages, start=1):
                 has_text = has_text or bool(page.chars)
                 texts.append(" ".join(w["text"] for w in page.extract_words()))
-                found = [r for t in page.extract_tables() for r in table_rows(t)]
-                rows.extend(found or _words_rows(page))
+                found = [r for t in page.extract_tables() for r in table_rows(t, page_no)]
+                if not found:
+                    found = [{**r, "status": "", "page": page_no, "line": n}
+                             for n, r in enumerate(_words_rows(page), start=1)]
+                rows.extend(found)
     except Exception as exc:                  # corrupt, not a PDF, password-protected ...
         raise PdfUnreadable("This file could not be read as a PDF (it may be damaged, "
                             f"password-protected or not a PDF: {type(exc).__name__}).") from exc
@@ -123,14 +183,26 @@ def load_pdf(source) -> pd.DataFrame:
     if not rows:
         raise PdfUnreadable("No order table (dates and order ids) was found in this PDF.")
 
-    df = pd.DataFrame(rows, columns=COLUMNS)
+    df = pd.DataFrame(rows, columns=[*COLUMNS, *DETAIL_COLUMNS] if details else COLUMNS)
     for col in ("original_quantity", "original_length"):
         df[col] = pd.to_numeric(df[col], errors="coerce")
     for col in ("code", "zone"):
         df[col] = df[col].map(lambda v: _clean_text(str(v)) if v is not None else "")
     df.attrs["incomplete_rows"] = int(df[["original_quantity", "original_length"]].isna().any(axis=1).sum())
     df.attrs["footer_matches"] = footer_matches(df, texts)
+    df.attrs["printed"] = printed_totals(texts)
+    if details:
+        df["item_number"] = report_sku(texts)
     return df
+
+
+PRINT_ROUNDING = 0.005 + 1e-6      # the report prints its quantity total to 2 decimals (760.765 shows as 760.76)
+
+
+def totals_agree(rows: int, quantity: float, printed_rows: int, printed_quantity: float) -> bool:
+    """The row count must match exactly; the quantity may differ only by the report's own rounding to 2 decimals.
+    Not a per-row allowance: a missing or extra row can never hide inside the tolerance."""
+    return rows == printed_rows and abs(quantity - printed_quantity) <= PRINT_ROUNDING
 
 
 def footer_matches(df: pd.DataFrame, page_texts: list[str]) -> bool:
@@ -139,6 +211,9 @@ def footer_matches(df: pd.DataFrame, page_texts: list[str]) -> bool:
     Printed reports end with totals; finding exactly our numbers there is strong evidence that
     every row was read. Returns False when they are absent or different (no claim either way).
     """
+    printed = printed_totals(page_texts)
+    if printed is not None:                              # the structured totals line: strict comparison
+        return totals_agree(len(df), float(df["original_quantity"].sum()), *printed)
     tokens = [t for text in page_texts for t in re.findall(r"\d+(?:\.\d+)?", text)]
     total = float(df["original_quantity"].sum())
     shown = [t for t in tokens if "." in t and abs(float(t) - total) <= 0.01]
@@ -156,6 +231,8 @@ class LoadReport:
     confirmed: list[str] = field(default_factory=list)         # totals printed in the PDF match
     unconfirmed: list[str] = field(default_factory=list)       # no printed totals, or they differ
     duplicates: int = 0                                         # rows shared by overlapping files
+    printed: dict[str, tuple[int, float]] = field(default_factory=dict)   # file name -> (rows, quantity) it prints
+    read: dict[str, tuple[int, float]] = field(default_factory=dict)      # file name -> (rows, quantity) we read
 
 
 def merge_reports(frames: list[pd.DataFrame]) -> tuple[pd.DataFrame, int]:
@@ -172,17 +249,25 @@ def merge_reports(frames: list[pd.DataFrame]) -> tuple[pd.DataFrame, int]:
     return merged.reset_index(drop=True), len(combined) - len(merged)
 
 
-def load_many(files: list[tuple[str, object]]) -> tuple[pd.DataFrame, LoadReport]:
-    """Load (name, file) pairs; a bad file is reported by name and skipped, not fatal."""
+def load_many(files: list[tuple[str, object]], details: bool = False) -> tuple[pd.DataFrame, LoadReport]:
+    """Load (name, file) pairs; a bad file is reported by name and skipped, not fatal.
+
+    With `details` every row also carries its item status, `source_file`, page and line.
+    """
     report, frames = LoadReport(), []
     for name, source in files:
         try:
-            frame = load_pdf(source)
+            frame = load_pdf(source, details=details)
         except PdfUnreadable as exc:
             report.errors[name] = str(exc)
             continue
+        if details:
+            frame = frame.assign(source_file=name)
         frames.append(frame)
+        report.read[name] = (len(frame), round(float(frame["original_quantity"].sum()), 4))
         report.loaded.append(name)
+        if frame.attrs.get("printed"):
+            report.printed[name] = frame.attrs["printed"]
         (report.confirmed if frame.attrs.get("footer_matches") else report.unconfirmed).append(name)
     if not frames:
         raise PdfUnreadable("; ".join(f"{n}: {m}" for n, m in report.errors.items())

@@ -11,5 +11,11 @@ def _no_real_inbox(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _scratch_data_dir(tmp_path_factory, monkeypatch):
+    """Nothing a test saves (reports, decisions, settings) may land in the real data/ folder."""
+    monkeypatch.setenv("PERGOLA_DATA_DIR", str(tmp_path_factory.mktemp("data")))
+
+
+@pytest.fixture(autouse=True)
 def _strict(monkeypatch):
     monkeypatch.setenv("PERGOLA_STRICT", "1")

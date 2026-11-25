@@ -17,6 +17,7 @@ import email_report
 import ocr_ingest as ocr
 import pdf_ingest
 import pwa
+import report_loader
 from safety import show_failure, strict
 from uploads import upload_types
 import vision_ingest as vision
@@ -26,7 +27,7 @@ st.set_page_config(page_title="ניהול פרגולות חכם", page_icon="ico
 # Streamlit re-runs this script on every interaction but keeps imported modules cached, so a
 # running server would otherwise keep using an old calculator.py after it is edited. Reload the
 # project modules (dependencies first) so the functions called below always match the files.
-for _module in (ocr, calc, email_report, pdf_ingest, pwa, vision):
+for _module in (ocr, calc, email_report, pdf_ingest, pwa, vision, report_loader):
     try:
         importlib.reload(_module)
     except Exception:            # keep the module that is already loaded
@@ -140,33 +141,17 @@ if source == "Excel / CSV file":
 elif source == "PDF report":
     pdfs = st.file_uploader("Upload digital PDF order reports", type=upload_types("pdf"),
                             accept_multiple_files=True)
-    if pdfs:
-        try:
-            raw, load_report = pdf_ingest.load_many([(f.name, f) for f in pdfs])
-        except pdf_ingest.PdfUnreadable as exc:
-            st.error(str(exc))
-            st.stop()
-        except Exception as exc:                  # an empty, damaged or unexpected file
-            st.error(f"Could not read the PDF file(s): {exc}")
-            st.stop()
-        for name, why in load_report.errors.items():
-            st.error(f"Skipped {name}: {why}")
-        if load_report.duplicates:
-            st.warning(f"{load_report.duplicates} row(s) appear in more than one of the files "
-                       "(the reports overlap) and are counted once.")
-        incomplete = raw[["original_quantity", "original_length"]].isna().any(axis=1)
-        if incomplete.any():
-            st.warning(f"{int(incomplete.sum())} row(s) have no readable quantity or length and "
-                       "are left out.")
-            raw = raw[~incomplete].reset_index(drop=True)
-        loaded = [f for f in pdfs if f.name in load_report.loaded]
-        source_name = loaded[0].name if len(loaded) == 1 else f"{len(loaded)} PDF reports"
-        source_id = "|".join(f"{f.name}:{f.size}" for f in loaded)
-        if load_report.confirmed and not load_report.unconfirmed and not load_report.duplicates:
-            st.success("The row count and quantity total match the totals printed in "
-                       + ("the report." if len(loaded) == 1 else f"each of the {len(loaded)} reports."))
-        elif load_report.unconfirmed:
-            st.caption("Could not confirm the printed totals for: " + ", ".join(load_report.unconfirmed))
+    try:
+        loaded = report_loader.get("santaf_report", pdfs)
+    except pdf_ingest.PdfUnreadable as exc:
+        st.error(f"הקובץ לא נקלט: {exc}")
+        st.stop()
+    except Exception as exc:                      # an unexpected failure while reading: a message, never a white screen
+        st.error(f"הקובץ לא נקלט בגלל תקלה לא צפויה: {exc}")
+        st.stop()
+    if loaded is not None:
+        report_loader.show(loaded, "santaf_report")
+        raw, source_name, source_id = loaded.raw, loaded.source_name, loaded.source_id
     else:
         st.info("Upload a digital PDF report (text can be selected in it). Scanned PDFs have no "
                 "text layer - use the scan option for those.")
